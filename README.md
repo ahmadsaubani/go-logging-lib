@@ -3,17 +3,18 @@
 [![Go Version](https://img.shields.io/badge/go-%3E%3D1.21-blue.svg)](https://golang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A comprehensive, production-ready Go logging library with daily rotation, multi-format output, and **Gin framework integration**.
+A comprehensive, production-ready Go logging library with daily rotation, multi-format output, and **native Gin framework integration**. Other frameworks supported via manual implementation patterns.
 
 ## 🌟 Features
 
 - **📅 Daily Log Rotation**: Automatic dated log files with thread-safe operations
 - **🎯 Multi-format Output**: Console, file, and JSON/Loki formats simultaneously  
-- **🚀 Gin Integration**: Complete middleware suite with anti-duplication mechanisms
+- **🚀 Native Gin Integration**: Complete middleware suite with anti-duplication mechanisms
 - **📡 Context-aware Logging**: Request metadata injection for structured logging
 - **🔍 Advanced Error Handling**: Stack traces, request context, error categorization
 - **⚡ Thread-safe**: Built for concurrent high-performance applications
 - **🧪 Battle-tested**: Comprehensive test suite with actual file verification
+- **🔧 Framework Agnostic**: Core logging works with any framework, native middleware for Gin only
 
 ---
 
@@ -28,6 +29,20 @@ For Gin projects (recommended):
 go get github.com/ahmadsaubani/go-logging-lib
 go get github.com/gin-gonic/gin
 ```
+
+---
+
+## 🎯 Framework Support
+
+| Framework | Support Level | Middleware Available | Implementation |
+|-----------|---------------|---------------------|----------------|
+| **Gin** | ✅ **Native** | ✅ Built-in | `middleware/gin` package |
+| Chi | 🔧 Manual | ❌ Pattern only | Manual implementation required |
+| Echo | 🔧 Manual | ❌ Pattern only | Manual implementation required |
+| Fiber | 🔧 Manual | ❌ Pattern only | Manual implementation required |
+| Standard `net/http` | 🔧 Manual | ❌ Pattern only | Manual implementation required |
+
+**Recommendation**: Use **Gin** for best experience with native middleware support and anti-duplication features.
 
 ---
 
@@ -254,7 +269,11 @@ func deleteUser(logger *logging.Logger) gin.HandlerFunc {
 
 **Note**: This library has **native Gin middleware**, but can be used with other frameworks using standard Go patterns:
 
-### Chi Router Example
+### Manual Implementation for Other Frameworks (Chi, Echo, Fiber)
+
+**Important**: This library provides **native middleware only for Gin**. For other frameworks, you need manual implementation.
+
+#### Chi Router Example (Manual Implementation)
 
 ```go
 package main
@@ -272,7 +291,7 @@ import (
 func main() {
     config := &logging.Config{
         ServiceName:  "chi-api",
-        LogPath:      "./logs/chi-app",
+        LogPath:      "./logs/chi-app", 
         EnableStdout: true,
         EnableFile:   true,
         EnableLoki:   true,
@@ -282,7 +301,8 @@ func main() {
     
     r := chi.NewRouter()
     
-    // Custom Chi middleware (manual implementation)
+    // Manual middleware implementation for Chi
+    // (No built-in Chi middleware available)
     r.Use(func(next http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
             // Manually inject context metadata
@@ -301,7 +321,7 @@ func main() {
     
     r.Get("/api/health", func(w http.ResponseWriter, r *http.Request) {
         logger.Info("🏥 Health endpoint accessed")
-        w.Header().Set("Content-Type", "application/json")
+        w.Header().Set("Content-Type", "application/json") 
         w.Write([]byte(`{"status": "healthy", "service": "chi-api"}`))
     })
     
@@ -313,6 +333,8 @@ func generateRequestID() string {
     return fmt.Sprintf("req-%d", time.Now().UnixNano())
 }
 ```
+
+**Note**: The above is a **manual implementation pattern**. Unlike Gin, there are no built-in Chi middleware functions in this library. You must implement the middleware yourself following this pattern.
 
 ### Standard HTTP Handler Example
 
@@ -1024,6 +1046,157 @@ The JSON logs (`*.error-loki-*.log`) can be directly ingested by:
 - **Grafana/Loki**: Configure Promtail to watch log files
 - **ELK Stack**: Logstash can parse the JSON format directly
 - **Datadog/New Relic**: Configure agents to monitor JSON log files
+
+---
+
+## ⚠️ Common Pitfalls & Troubleshooting
+
+### 1. Duplicate Error Logging in Gin Applications
+
+**Problem**: Manual error logging in service/controller AND automatic HTTP error middleware both log the same error.
+
+```go
+// ❌ BAD: This will cause duplicate logging
+func (h *handler) CreateUser(c *gin.Context) {
+    if err := h.service.CreateUser(ctx, user); err != nil {
+        logger.Error(ctx, err)           // Manual log #1 
+        c.JSON(500, gin.H{"error": err}) // HTTP middleware will log again #2 = DUPLICATE!
+        return
+    }
+}
+```
+
+**Solution A**: Use `LogErrorWithMark` to prevent duplication:
+```go
+// ✅ GOOD: Prevents middleware from logging again
+func (h *handler) CreateUser(c *gin.Context) {
+    if err := h.service.CreateUser(ctx, user); err != nil {
+        logger.LogErrorWithMark(c, err)  // Marks as logged
+        c.JSON(500, gin.H{"error": err}) // Middleware skips logging
+        return
+    }
+}
+```
+
+**Solution B**: Mark manually after separate logging calls:
+```go
+// ✅ GOOD: Mark after logging manually
+if err := emailService.Send(ctx, mail); err != nil {
+    logger.Error(ctx, err)          // Log error manually
+    logger.ErrorLoki(ctx, LevelCritical, err)
+    logging.MarkErrorLogged(c)      // Prevent middleware duplication
+    c.JSON(500, gin.H{"error": "email failed"})
+    return
+}
+```
+
+### 2. Missing Request Context
+
+**Problem**: Logging without proper request context loses valuable debugging information.
+
+```go
+// ❌ BAD: No request metadata
+logger.Error(context.Background(), err)
+```
+
+```go
+// ✅ GOOD: With request context and metadata
+ctx := logging.WithMeta(c.Request.Context(), logging.Meta{
+    RequestID: "req-123",
+    IP: "127.0.0.1", 
+    Method: "POST",
+    Path: "/api/users",
+    UserAgent: "MyApp/1.0",
+})
+logger.Error(ctx, err)
+```
+
+### 3. Incorrect Middleware Order
+
+**Problem**: Wrong middleware order can break logging functionality.
+
+```go
+// ❌ BAD: Wrong order
+r.Use(
+    gin.Recovery(),                              // Too early!
+    ginmiddleware.GinLogger(logger),
+    ginmiddleware.GinMiddleware(logger),         // Should be first!
+    ginmiddleware.GinHTTPErrorLogger(logger),
+)
+```
+
+```go
+// ✅ GOOD: Correct order
+r.Use(
+    ginmiddleware.GinMiddleware(logger),         // 1. Inject metadata
+    ginmiddleware.GinLogger(logger),            // 2. Log requests  
+    ginmiddleware.GinHTTPErrorLogger(logger),   // 3. Handle HTTP errors
+    ginmiddleware.GinRecovery(logger),          // 4. Panic recovery
+)
+```
+
+### 4. Configuration Issues
+
+**Problem**: Forgetting to enable required outputs.
+
+```go
+// ❌ BAD: File logging disabled in production
+config := &logging.Config{
+    ServiceName:  "my-service",
+    EnableStdout: true,
+    EnableFile:   false,  // Logs lost!
+    EnableLoki:   false,
+}
+```
+
+```go
+// ✅ GOOD: Proper production config
+config := &logging.Config{
+    ServiceName:  "my-service", 
+    LogPath:      "/var/log/myapp/app",
+    EnableStdout: false, // Reduce console noise
+    EnableFile:   true,  // Essential for debugging
+    EnableLoki:   true,  // For monitoring systems
+}
+```
+
+### 5. Testing Without File Verification
+
+**Problem**: Unit tests pass but log files aren't actually created.
+
+```go
+// ❌ BAD: Test doesn't verify actual file output
+func TestLogging(t *testing.T) {
+    logger, _ := logging.New(config)
+    logger.Error(ctx, errors.New("test"))
+    // No verification of log files!
+}
+```
+
+```go
+// ✅ GOOD: Verify actual file creation and content
+func TestLogging(t *testing.T) {
+    testDir := "./test-logs"
+    defer os.RemoveAll(testDir)
+    
+    config := &logging.Config{
+        LogPath:      testDir + "/test",
+        EnableFile:   true,
+        EnableLoki:   true,
+    }
+    
+    logger, _ := logging.New(config)
+    logger.Error(ctx, errors.New("test error"))
+    
+    // Verify files exist and contain expected content
+    errorFile := filepath.Join(testDir, "test.error-*.log")
+    files, _ := filepath.Glob(errorFile)
+    require.NotEmpty(t, files, "Error log file should be created")
+    
+    content, _ := ioutil.ReadFile(files[0])
+    assert.Contains(t, string(content), "test error")
+}
+```
 
 ---
 
