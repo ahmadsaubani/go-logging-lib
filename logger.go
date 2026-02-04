@@ -43,7 +43,8 @@ func New(config *Config) (*Logger, error) {
 	if config == nil {
 		config = &Config{
 			ServiceName:    "app",
-			LogPath:        "./logs/app",
+			LogPath:        "./logs",
+			FilePrefix:     "app",
 			EnableStdout:   true,
 			EnableFile:     true,
 			EnableLoki:     false,
