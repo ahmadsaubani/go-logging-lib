@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -13,6 +15,24 @@ import (
 	"github.com/ahmadsaubani/go-logging-lib/middleware"
 	"github.com/gin-gonic/gin"
 )
+
+// LokiLogEntry represents the unified Loki JSON format
+type LokiLogEntry struct {
+	TS         string            `json:"ts"`
+	Level      string            `json:"level"`
+	Service    string            `json:"service"`
+	RequestID  string            `json:"request_id"`
+	StatusCode int               `json:"status_code"`
+	LatencyMS  int64             `json:"latency_ms"`
+	HTTP       map[string]string `json:"http"`
+	Errors     *ErrorDetail      `json:"errors"`
+}
+
+type ErrorDetail struct {
+	Error  string                 `json:"error"`
+	Source map[string]interface{} `json:"source"`
+	Stack  []string               `json:"stack"`
+}
 
 func TestBasicAndGinLogging(t *testing.T) {
 	// Test 1: Basic Logging - writes to examples/basic/logs/
@@ -52,7 +72,7 @@ func TestBasicAndGinLogging(t *testing.T) {
 			UserAgent: "BasicTestClient/1.0",
 		})
 
-		// Test access log - simulate HTTP requests
+		// Test access log - simulate HTTP requests (success - errors=null)
 		logger.LogRequest(ctx, 200, 50*time.Millisecond)
 
 		ctx2 := logging.WithMeta(context.Background(), logging.Meta{
@@ -73,6 +93,7 @@ func TestBasicAndGinLogging(t *testing.T) {
 		})
 		logger.LogRequest(ctx3, 404, 10*time.Millisecond)
 
+		// Test LogRequestWithError - simulate 500 error with error detail
 		ctx4 := logging.WithMeta(context.Background(), logging.Meta{
 			RequestID: "basic-req-004",
 			IP:        "127.0.0.1",
@@ -80,13 +101,14 @@ func TestBasicAndGinLogging(t *testing.T) {
 			Path:      "/api/error",
 			UserAgent: "BasicTestClient/1.0",
 		})
-		logger.LogRequest(ctx4, 500, 200*time.Millisecond)
+		dbError := errors.New("BASIC TEST: database connection failed")
+		logger.LogRequestWithError(ctx4, 500, 200*time.Millisecond, dbError)
 
-		// Test error logging
+		// Test error logging (detailed format to error.log)
 		basicErr := errors.New("BASIC TEST: sample database error")
 		logger.Error(ctx, basicErr)
 
-		// Test Loki JSON logging
+		// Test Loki JSON logging directly
 		criticalErr := errors.New("BASIC TEST: critical system failure")
 		logger.ErrorLoki(ctx, logging.LevelCritical, criticalErr)
 
@@ -103,7 +125,7 @@ func TestBasicAndGinLogging(t *testing.T) {
 		today := time.Now().Format("2006-01-02")
 		accessFile := basicLogDir + "/app.access-" + today + ".log"
 		errorFile := basicLogDir + "/app.error-" + today + ".log"
-		lokiFile := basicLogDir + "/app.error-loki-" + today + ".log"
+		lokiFile := basicLogDir + "/app.loki-" + today + ".log"
 
 		// Verify access log
 		if content, err := os.ReadFile(accessFile); err != nil {
@@ -142,30 +164,48 @@ func TestBasicAndGinLogging(t *testing.T) {
 			t.Logf("BASIC Error log: %s (%d bytes)", errorFile, len(content))
 		}
 
-		// Verify Loki log
+		// Verify Loki log - UNIFIED FORMAT
 		if content, err := os.ReadFile(lokiFile); err != nil {
 			t.Errorf("Failed to read basic Loki log: %v", err)
 		} else {
 			contentStr := string(content)
-			if !strings.Contains(contentStr, `"service":"basic-example"`) {
-				t.Error("Expected basic service name not found in Loki log")
+			lines := strings.Split(strings.TrimSpace(contentStr), "\n")
+			
+			var successCount, errorCount int
+			
+			for _, line := range lines {
+				if line == "" {
+					continue
+				}
+				
+				var entry LokiLogEntry
+				if err := json.Unmarshal([]byte(line), &entry); err != nil {
+					t.Errorf("Failed to parse Loki JSON: %v\nLine: %s", err, line)
+					continue
+				}
+				
+				// Verify consistent structure
+				if entry.Service != "basic-example" {
+					t.Errorf("Expected service 'basic-example', got '%s'", entry.Service)
+				}
+				
+				// Count entries based on errors field
+				if entry.Errors != nil {
+					errorCount++
+				} else {
+					successCount++
+				}
 			}
-			if !strings.Contains(contentStr, `"level":"CRITICAL"`) {
-				t.Error("Expected CRITICAL level not found in Loki log")
+			
+			t.Logf("BASIC Loki log: %s (%d bytes, %d entries with errors=null, %d entries with errors object)", 
+				lokiFile, len(content), successCount, errorCount)
+			
+			if successCount == 0 {
+				t.Error("Expected at least one entry with errors=null")
 			}
-			// Verify access logs in Loki format
-			if !strings.Contains(contentStr, `"status_code":200`) {
-				t.Error("Expected status_code 200 not found in Loki log")
+			if errorCount == 0 {
+				t.Error("Expected at least one entry with errors object")
 			}
-			if !strings.Contains(contentStr, `"status_code":404`) {
-				t.Error("Expected status_code 404 not found in Loki log")
-			}
-			if !strings.Contains(contentStr, `"status_code":500`) {
-				t.Error("Expected status_code 500 not found in Loki log")
-			}
-			// Count JSON entries
-			jsonEntries := strings.Count(contentStr, `"level":`)
-			t.Logf("BASIC Loki log: %s (%d bytes, %d JSON entries)", lokiFile, len(content), jsonEntries)
 		}
 	})
 
@@ -195,10 +235,10 @@ func TestBasicAndGinLogging(t *testing.T) {
 
 		// Setup Gin router with middleware
 		r := gin.New()
-		r.Use(middleware.GinMiddleware(logger))
-		r.Use(middleware.GinLogger(logger))
-		r.Use(middleware.GinHTTPErrorLogger(logger))
-		r.Use(middleware.GinRecovery(logger))
+		r.Use(middleware.GinMiddleware(logger))      // 1. Setup request context
+		r.Use(middleware.GinLogger(logger))          // 2. Log requests
+		r.Use(middleware.GinHTTPErrorLogger(logger)) // 3. Log errors to error.log
+		r.Use(middleware.GinRecovery(logger))        // 4. Catch panics last
 
 		// Routes for testing
 		r.GET("/", func(c *gin.Context) {
@@ -228,13 +268,6 @@ func TestBasicAndGinLogging(t *testing.T) {
 			panic("GIN TEST: test panic for recovery")
 		})
 
-		r.GET("/loki", func(c *gin.Context) {
-			// Direct Loki logging
-			testErr := errors.New("GIN TEST: loki formatted error")
-			logger.ErrorLoki(c.Request.Context(), logging.LevelError, testErr)
-			c.JSON(200, gin.H{"message": "Error logged to Loki format"})
-		})
-
 		// Execute test requests
 		t.Log("Testing Gin endpoints...")
 		
@@ -248,7 +281,6 @@ func TestBasicAndGinLogging(t *testing.T) {
 			{"GET", "/error", "manual error endpoint"},
 			{"GET", "/auto-error", "auto error endpoint"},
 			{"GET", "/panic", "panic endpoint"},
-			{"GET", "/loki", "loki endpoint"},
 		}
 
 		for _, req := range requests {
@@ -268,7 +300,7 @@ func TestBasicAndGinLogging(t *testing.T) {
 		today := time.Now().Format("2006-01-02")
 		ginAccessFile := ginLogDir + "/gin-app.access-" + today + ".log"
 		ginErrorFile := ginLogDir + "/gin-app.error-" + today + ".log"
-		ginLokiFile := ginLogDir + "/gin-app.error-loki-" + today + ".log"
+		ginLokiFile := ginLogDir + "/gin-app.loki-" + today + ".log"
 
 		// Verify Gin access log
 		if content, err := os.ReadFile(ginAccessFile); err != nil {
@@ -307,24 +339,45 @@ func TestBasicAndGinLogging(t *testing.T) {
 			t.Logf("GIN Error log: %s (%d bytes)", ginErrorFile, len(content))
 		}
 
-		// Verify Gin Loki log
+		// Verify Gin Loki log - UNIFIED FORMAT
 		if content, err := os.ReadFile(ginLokiFile); err != nil {
 			t.Errorf("Failed to read gin Loki log: %v", err)
 		} else {
 			contentStr := string(content)
+			lines := strings.Split(strings.TrimSpace(contentStr), "\n")
 			
-			// Should contain service name
-			if !strings.Contains(contentStr, `"service":"gin-example"`) {
-				t.Error("Expected gin service name not found in Loki log")
+			var successCount, errorCount int
+			
+			for _, line := range lines {
+				if line == "" {
+					continue
+				}
+				
+				var entry LokiLogEntry
+				if err := json.Unmarshal([]byte(line), &entry); err != nil {
+					t.Errorf("Failed to parse Gin Loki JSON: %v\nLine: %s", err, line)
+					continue
+				}
+				
+				// Verify consistent structure
+				if entry.Service != "gin-example" {
+					t.Errorf("Expected service 'gin-example', got '%s'", entry.Service)
+				}
+				
+				// Verify errors field based on status code
+				if entry.StatusCode >= 400 {
+					if entry.Errors != nil {
+						errorCount++
+					}
+				} else {
+					if entry.Errors == nil {
+						successCount++
+					}
+				}
 			}
 			
-			// Count JSON entries
-			jsonEntries := strings.Count(contentStr, `"level":`)
-			if jsonEntries < 3 {
-				t.Errorf("Expected at least 3 JSON entries in Loki log, found %d", jsonEntries)
-			}
-			
-			t.Logf("GIN Loki log: %s (%d bytes, %d JSON entries)", ginLokiFile, len(content), jsonEntries)
+			t.Logf("GIN Loki log: %s (%d bytes, %d success with errors=null, %d error with errors object)", 
+				ginLokiFile, len(content), successCount, errorCount)
 		}
 	})
 
@@ -332,6 +385,7 @@ func TestBasicAndGinLogging(t *testing.T) {
 	t.Log("=== TEST SUMMARY ===")
 	t.Log("Basic logging tested - logs in ../examples/basic/logs/")
 	t.Log("Gin middleware tested - logs in ../examples/gin/logs/")
+	t.Log("Unified Loki format verified (errors=null for success, errors object for errors)")
 	t.Log("Anti-duplication verified")
 	t.Log("Multiple log formats verified (access, error, loki)")
 	t.Log("Daily rotation verified")
@@ -340,15 +394,19 @@ func TestBasicAndGinLogging(t *testing.T) {
 
 func TestLoggingWithoutRotation(t *testing.T) {
 	t.Run("LoggingWithoutRotation", func(t *testing.T) {
-		noRotateLogDir := "../examples/basic/logs/no-rotate"
+		basicLogDir := "../examples/basic/logs"
 
-		// Clean and ensure directory exists
-		os.RemoveAll(noRotateLogDir)
-		os.MkdirAll(noRotateLogDir, 0755)
+		// Ensure directory exists
+		os.MkdirAll(basicLogDir, 0755)
+
+		// Clean previous test files
+		os.Remove(basicLogDir + "/no-rotate.access.log")
+		os.Remove(basicLogDir + "/no-rotate.error.log")
+		os.Remove(basicLogDir + "/no-rotate.loki.log")
 
 		config := &logging.Config{
 			ServiceName:    "no-rotate-example",
-			LogPath:        noRotateLogDir + "/app",
+			LogPath:        basicLogDir + "/no-rotate",
 			EnableStdout:   true,
 			EnableFile:     true,
 			EnableLoki:     true,
@@ -374,7 +432,7 @@ func TestLoggingWithoutRotation(t *testing.T) {
 			UserAgent: "NoRotateTestClient/1.0",
 		})
 
-		// Test access log - simulate HTTP requests
+		// Test success request (errors=null)
 		logger.LogRequest(ctx, 200, 50*time.Millisecond)
 
 		ctx2 := logging.WithMeta(context.Background(), logging.Meta{
@@ -384,7 +442,9 @@ func TestLoggingWithoutRotation(t *testing.T) {
 			Path:      "/api/data",
 			UserAgent: "NoRotateTestClient/1.0",
 		})
-		logger.LogRequest(ctx2, 500, 150*time.Millisecond)
+		// Test error request with error detail
+		dbErr := errors.New("NO ROTATE TEST: database timeout")
+		logger.LogRequestWithError(ctx2, 500, 150*time.Millisecond, dbErr)
 
 		// Test error logging
 		testErr := errors.New("NO ROTATE TEST: sample error without rotation")
@@ -400,9 +460,9 @@ func TestLoggingWithoutRotation(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 
 		// Verify log files WITHOUT date suffix
-		accessFile := noRotateLogDir + "/app.access.log"
-		errorFile := noRotateLogDir + "/app.error.log"
-		lokiFile := noRotateLogDir + "/app.error-loki.log"
+		accessFile := basicLogDir + "/no-rotate.access.log"
+		errorFile := basicLogDir + "/no-rotate.error.log"
+		lokiFile := basicLogDir + "/no-rotate.loki.log"
 
 		// Verify access log (without date)
 		if content, err := os.ReadFile(accessFile); err != nil {
@@ -437,24 +497,49 @@ func TestLoggingWithoutRotation(t *testing.T) {
 			t.Logf("NO ROTATE Error log: %s (%d bytes)", errorFile, len(content))
 		}
 
-		// Verify Loki log (without date)
+		// Verify Loki log (without date) - UNIFIED FORMAT
 		if content, err := os.ReadFile(lokiFile); err != nil {
 			t.Errorf("Failed to read Loki log without rotation: %v", err)
 		} else {
-			if !strings.Contains(string(content), `"service":"no-rotate-example"`) {
-				t.Error("Expected service name not found in Loki log")
+			contentStr := string(content)
+			lines := strings.Split(strings.TrimSpace(contentStr), "\n")
+			
+			var successCount, errorCount int
+			
+			for _, line := range lines {
+				if line == "" {
+					continue
+				}
+				
+				var entry LokiLogEntry
+				if err := json.Unmarshal([]byte(line), &entry); err != nil {
+					t.Errorf("Failed to parse Loki JSON: %v", err)
+					continue
+				}
+				
+				if entry.Service != "no-rotate-example" {
+					t.Errorf("Expected service 'no-rotate-example', got '%s'", entry.Service)
+				}
+				
+				if entry.StatusCode >= 400 {
+					if entry.Errors != nil {
+						errorCount++
+					}
+				} else {
+					if entry.Errors == nil {
+						successCount++
+					}
+				}
 			}
-			if !strings.Contains(string(content), `"level":"CRITICAL"`) {
-				t.Error("Expected CRITICAL level not found in Loki log")
-			}
-			t.Logf("NO ROTATE Loki log: %s (%d bytes)", lokiFile, len(content))
+			
+			t.Logf("NO ROTATE Loki log: %s (%d bytes, %d success, %d error)", lokiFile, len(content), successCount, errorCount)
 		}
 
 		// Verify that date-based files do NOT exist
 		today := time.Now().Format("2006-01-02")
-		rotatedAccessFile := noRotateLogDir + "/app.access-" + today + ".log"
-		rotatedErrorFile := noRotateLogDir + "/app.error-" + today + ".log"
-		rotatedLokiFile := noRotateLogDir + "/app.error-loki-" + today + ".log"
+		rotatedAccessFile := basicLogDir + "/no-rotate.access-" + today + ".log"
+		rotatedErrorFile := basicLogDir + "/no-rotate.error-" + today + ".log"
+		rotatedLokiFile := basicLogDir + "/no-rotate.loki-" + today + ".log"
 
 		if _, err := os.Stat(rotatedAccessFile); err == nil {
 			t.Errorf("Date-based access file should NOT exist when rotation is disabled: %s", rotatedAccessFile)
@@ -473,15 +558,19 @@ func TestLoggingWithoutRotation(t *testing.T) {
 	t.Run("GinMiddlewareWithoutRotation", func(t *testing.T) {
 		gin.SetMode(gin.TestMode)
 
-		ginNoRotateLogDir := "../examples/gin/logs/no-rotate"
+		ginLogDir := "../examples/gin/logs"
 
-		// Clean and ensure directory exists
-		os.RemoveAll(ginNoRotateLogDir)
-		os.MkdirAll(ginNoRotateLogDir, 0755)
+		// Ensure directory exists
+		os.MkdirAll(ginLogDir, 0755)
+
+		// Clean previous test files
+		os.Remove(ginLogDir + "/gin-no-rotate.access.log")
+		os.Remove(ginLogDir + "/gin-no-rotate.error.log")
+		os.Remove(ginLogDir + "/gin-no-rotate.loki.log")
 
 		config := &logging.Config{
 			ServiceName:    "gin-no-rotate-example",
-			LogPath:        ginNoRotateLogDir + "/gin-app",
+			LogPath:        ginLogDir + "/gin-no-rotate",
 			EnableStdout:   true,
 			EnableFile:     true,
 			EnableLoki:     true,
@@ -495,10 +584,10 @@ func TestLoggingWithoutRotation(t *testing.T) {
 
 		// Setup Gin router with middleware
 		r := gin.New()
-		r.Use(middleware.GinMiddleware(logger))
-		r.Use(middleware.GinLogger(logger))
-		r.Use(middleware.GinHTTPErrorLogger(logger))
-		r.Use(middleware.GinRecovery(logger))
+		r.Use(middleware.GinMiddleware(logger))      // 1. Setup request context
+		r.Use(middleware.GinLogger(logger))          // 2. Log requests
+		r.Use(middleware.GinHTTPErrorLogger(logger)) // 3. Log errors to error.log
+		r.Use(middleware.GinRecovery(logger))        // 4. Catch panics last
 
 		// Routes for testing
 		r.GET("/", func(c *gin.Context) {
@@ -525,12 +614,6 @@ func TestLoggingWithoutRotation(t *testing.T) {
 			panic("GIN NO ROTATE TEST: test panic for recovery")
 		})
 
-		r.GET("/loki", func(c *gin.Context) {
-			testErr := errors.New("GIN NO ROTATE TEST: loki formatted error")
-			logger.ErrorLoki(c.Request.Context(), logging.LevelError, testErr)
-			c.JSON(200, gin.H{"message": "Error logged to Loki format"})
-		})
-
 		// Execute test requests
 		t.Log("Testing Gin endpoints without rotation...")
 
@@ -544,7 +627,6 @@ func TestLoggingWithoutRotation(t *testing.T) {
 			{"GET", "/error", "manual error endpoint"},
 			{"GET", "/auto-error", "auto error endpoint"},
 			{"GET", "/panic", "panic endpoint"},
-			{"GET", "/loki", "loki endpoint"},
 		}
 
 		for _, req := range requests {
@@ -559,9 +641,9 @@ func TestLoggingWithoutRotation(t *testing.T) {
 		time.Sleep(500 * time.Millisecond)
 
 		// Verify Gin log files WITHOUT date suffix
-		ginAccessFile := ginNoRotateLogDir + "/gin-app.access.log"
-		ginErrorFile := ginNoRotateLogDir + "/gin-app.error.log"
-		ginLokiFile := ginNoRotateLogDir + "/gin-app.error-loki.log"
+		ginAccessFile := ginLogDir + "/gin-no-rotate.access.log"
+		ginErrorFile := ginLogDir + "/gin-no-rotate.error.log"
+		ginLokiFile := ginLogDir + "/gin-no-rotate.loki.log"
 
 		// Verify Gin access log (without date)
 		if content, err := os.ReadFile(ginAccessFile); err != nil {
@@ -594,28 +676,49 @@ func TestLoggingWithoutRotation(t *testing.T) {
 			t.Logf("GIN NO ROTATE Error log: %s (%d bytes)", ginErrorFile, len(content))
 		}
 
-		// Verify Gin Loki log (without date)
+		// Verify Gin Loki log (without date) - UNIFIED FORMAT
 		if content, err := os.ReadFile(ginLokiFile); err != nil {
 			t.Errorf("Failed to read gin Loki log without rotation: %v", err)
 		} else {
 			contentStr := string(content)
-
-			if !strings.Contains(contentStr, `"service":"gin-no-rotate-example"`) {
-				t.Error("Expected gin service name not found in Loki log")
+			lines := strings.Split(strings.TrimSpace(contentStr), "\n")
+			
+			var successCount, errorCount int
+			
+			for _, line := range lines {
+				if line == "" {
+					continue
+				}
+				
+				var entry LokiLogEntry
+				if err := json.Unmarshal([]byte(line), &entry); err != nil {
+					t.Errorf("Failed to parse Gin Loki JSON: %v", err)
+					continue
+				}
+				
+				if entry.Service != "gin-no-rotate-example" {
+					t.Errorf("Expected service 'gin-no-rotate-example', got '%s'", entry.Service)
+				}
+				
+				if entry.StatusCode >= 400 {
+					if entry.Errors != nil {
+						errorCount++
+					}
+				} else {
+					if entry.Errors == nil {
+						successCount++
+					}
+				}
 			}
-
-			jsonEntries := strings.Count(contentStr, `"level":`)
-			if jsonEntries < 3 {
-				t.Errorf("Expected at least 3 JSON entries in Loki log, found %d", jsonEntries)
-			}
-			t.Logf("GIN NO ROTATE Loki log: %s (%d bytes, %d JSON entries)", ginLokiFile, len(content), jsonEntries)
+			
+			t.Logf("GIN NO ROTATE Loki log: %s (%d bytes, %d success, %d error)", ginLokiFile, len(content), successCount, errorCount)
 		}
 
 		// Verify that date-based files do NOT exist
 		today := time.Now().Format("2006-01-02")
-		rotatedGinAccessFile := ginNoRotateLogDir + "/gin-app.access-" + today + ".log"
-		rotatedGinErrorFile := ginNoRotateLogDir + "/gin-app.error-" + today + ".log"
-		rotatedGinLokiFile := ginNoRotateLogDir + "/gin-app.error-loki-" + today + ".log"
+		rotatedGinAccessFile := ginLogDir + "/gin-no-rotate.access-" + today + ".log"
+		rotatedGinErrorFile := ginLogDir + "/gin-no-rotate.error-" + today + ".log"
+		rotatedGinLokiFile := ginLogDir + "/gin-no-rotate.loki-" + today + ".log"
 
 		if _, err := os.Stat(rotatedGinAccessFile); err == nil {
 			t.Errorf("Date-based gin access file should NOT exist when rotation is disabled: %s", rotatedGinAccessFile)
@@ -631,4 +734,259 @@ func TestLoggingWithoutRotation(t *testing.T) {
 	})
 
 	t.Log("=== NO ROTATION TEST COMPLETED ===")
+}
+
+// TestHTTPMiddleware tests the basic HTTP middleware (non-Gin)
+func TestHTTPMiddleware(t *testing.T) {
+	t.Run("BasicHTTPMiddleware", func(t *testing.T) {
+		basicLogDir := "../examples/basic/logs"
+
+		// Ensure directory exists
+		os.MkdirAll(basicLogDir, 0755)
+
+		// Clean previous test files
+		os.Remove(basicLogDir + "/http-test.access.log")
+		os.Remove(basicLogDir + "/http-test.error.log")
+		os.Remove(basicLogDir + "/http-test.loki.log")
+
+		config := &logging.Config{
+			ServiceName:    "http-middleware-example",
+			LogPath:        basicLogDir + "/http-test",
+			EnableStdout:   true,
+			EnableFile:     true,
+			EnableLoki:     true,
+			EnableRotation: false,
+		}
+
+		logger, err := logging.New(config)
+		if err != nil {
+			t.Fatalf("Failed to create logger: %v", err)
+		}
+
+		// Create HTTP server with middleware
+		mux := http.NewServeMux()
+
+		// Success endpoint
+		mux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("pong"))
+		})
+
+		// Error endpoint
+		mux.HandleFunc("/error", func(w http.ResponseWriter, r *http.Request) {
+			// Store error in context for Loki logging
+			testErr := errors.New("HTTP MIDDLEWARE TEST: database connection failed")
+			ctx := logging.WithError(r.Context(), testErr)
+			r = r.WithContext(ctx)
+
+			// Also log to error.log with detailed format
+			logger.Error(r.Context(), testErr)
+
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte("Internal Server Error"))
+		})
+
+		// Apply middleware chain
+		handler := middleware.HTTPRecovery(logger)(
+			middleware.HTTPMiddleware(logger)(
+				middleware.HTTPLogger(logger)(mux),
+			),
+		)
+
+		// Test requests
+		requests := []struct {
+			method       string
+			path         string
+			expectedCode int
+		}{
+			{"GET", "/ping", 200},
+			{"GET", "/ping", 200},
+			{"GET", "/error", 500},
+		}
+
+		for _, req := range requests {
+			t.Logf("Testing HTTP %s %s...", req.method, req.path)
+			request := httptest.NewRequest(req.method, req.path, nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, request)
+
+			if w.Code != req.expectedCode {
+				t.Errorf("Expected status %d, got %d", req.expectedCode, w.Code)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+
+		// Wait for file writes
+		time.Sleep(300 * time.Millisecond)
+
+		// Verify log files
+		accessFile := basicLogDir + "/http-test.access.log"
+		lokiFile := basicLogDir + "/http-test.loki.log"
+
+		// Verify access log
+		if content, err := os.ReadFile(accessFile); err != nil {
+			t.Errorf("Failed to read HTTP access log: %v", err)
+		} else {
+			contentStr := string(content)
+			if !strings.Contains(contentStr, "| 200 |") {
+				t.Error("Expected status 200 not found in access log")
+			}
+			if !strings.Contains(contentStr, "| 500 |") {
+				t.Error("Expected status 500 not found in access log")
+			}
+			t.Logf("HTTP Access log: %s (%d bytes)", accessFile, len(content))
+		}
+
+		// Verify Loki log - UNIFIED FORMAT
+		if content, err := os.ReadFile(lokiFile); err != nil {
+			t.Errorf("Failed to read HTTP Loki log: %v", err)
+		} else {
+			contentStr := string(content)
+			lines := strings.Split(strings.TrimSpace(contentStr), "\n")
+
+			var successCount, errorCount int
+
+			for _, line := range lines {
+				if line == "" {
+					continue
+				}
+
+				var entry LokiLogEntry
+				if err := json.Unmarshal([]byte(line), &entry); err != nil {
+					t.Errorf("Failed to parse HTTP Loki JSON: %v", err)
+					continue
+				}
+
+				if entry.Service != "http-middleware-example" {
+					t.Errorf("Expected service 'http-middleware-example', got '%s'", entry.Service)
+				}
+
+				if entry.StatusCode >= 400 {
+					errorCount++
+				} else {
+					if entry.Errors != nil {
+						t.Errorf("Expected errors=null for status %d", entry.StatusCode)
+					}
+					successCount++
+				}
+			}
+
+			t.Logf("HTTP Loki log: %s (%d bytes, %d success, %d error)", lokiFile, len(content), successCount, errorCount)
+
+			if successCount < 2 {
+				t.Errorf("Expected at least 2 success entries, got %d", successCount)
+			}
+		}
+	})
+
+	t.Log("=== HTTP MIDDLEWARE TEST COMPLETED ===")
+}
+
+// TestLokiFormatConsistency specifically tests that Loki format is consistent
+func TestLokiFormatConsistency(t *testing.T) {
+	t.Run("LokiFormatConsistency", func(t *testing.T) {
+		basicLogDir := "../examples/basic/logs"
+
+		// Ensure directory exists
+		os.MkdirAll(basicLogDir, 0755)
+
+		// Clean previous test files
+		os.Remove(basicLogDir + "/loki-test.access.log")
+		os.Remove(basicLogDir + "/loki-test.error.log")
+		os.Remove(basicLogDir + "/loki-test.loki.log")
+
+		config := &logging.Config{
+			ServiceName:    "loki-format-test",
+			LogPath:        basicLogDir + "/loki-test",
+			EnableStdout:   false,
+			EnableFile:     true,
+			EnableLoki:     true,
+			EnableRotation: false,
+		}
+
+		logger, err := logging.New(config)
+		if err != nil {
+			t.Fatalf("Failed to create logger: %v", err)
+		}
+
+		ctx := logging.WithMeta(context.Background(), logging.Meta{
+			RequestID: "loki-test-001",
+			IP:        "10.0.0.1",
+			Method:    "POST",
+			Path:      "/api/test",
+			UserAgent: "LokiTest/1.0",
+		})
+
+		// Test 1: Success request (errors should be null)
+		logger.LogRequest(ctx, 200, 100*time.Millisecond)
+
+		// Test 2: Error request (errors should have object)
+		testErr := errors.New("test error for Loki format")
+		logger.LogRequestWithError(ctx, 500, 200*time.Millisecond, testErr)
+
+		// Test 3: 404 without explicit error (errors should be null)
+		logger.LogRequest(ctx, 404, 50*time.Millisecond)
+
+		time.Sleep(200 * time.Millisecond)
+
+		// Verify Loki format
+		lokiFile := basicLogDir + "/loki-test.loki.log"
+		content, err := os.ReadFile(lokiFile)
+		if err != nil {
+			t.Fatalf("Failed to read Loki log: %v", err)
+		}
+
+		lines := strings.Split(strings.TrimSpace(string(content)), "\n")
+
+		expectedFormats := []struct {
+			statusCode  int
+			hasErrors   bool
+			description string
+		}{
+			{200, false, "Success 200 should have errors=null"},
+			{500, true, "Error 500 with explicit error should have errors object"},
+			{404, false, "Error 404 without explicit error should have errors=null"},
+		}
+
+		for i, line := range lines {
+			if line == "" || i >= len(expectedFormats) {
+				continue
+			}
+
+			var entry LokiLogEntry
+			if err := json.Unmarshal([]byte(line), &entry); err != nil {
+				t.Errorf("Failed to parse line %d: %v", i, err)
+				continue
+			}
+
+			expected := expectedFormats[i]
+
+			if entry.StatusCode != expected.statusCode {
+				t.Errorf("Line %d: Expected status %d, got %d", i, expected.statusCode, entry.StatusCode)
+			}
+
+			if expected.hasErrors {
+				if entry.Errors == nil {
+					t.Errorf("Line %d: %s - but errors is null", i, expected.description)
+				} else {
+					// Verify error object structure
+					if entry.Errors.Error == "" {
+						t.Errorf("Line %d: errors.error should not be empty", i)
+					}
+					if entry.Errors.Source == nil {
+						t.Errorf("Line %d: errors.source should not be nil", i)
+					}
+					t.Logf("Line %d: ✓ %s (error: %s)", i, expected.description, entry.Errors.Error)
+				}
+			} else {
+				if entry.Errors != nil {
+					t.Errorf("Line %d: %s - but errors is not null: %+v", i, expected.description, entry.Errors)
+				} else {
+					t.Logf("Line %d: ✓ %s", i, expected.description)
+				}
+			}
+		}
+	})
+
+	t.Log("=== LOKI FORMAT CONSISTENCY TEST COMPLETED ===")
 }

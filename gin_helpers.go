@@ -15,9 +15,14 @@ func IsErrorLogged(c *gin.Context) bool {
 	return exists && logged.(bool)
 }
 
+// SetLoggedError stores the error in context for Loki logging
+func SetLoggedError(c *gin.Context, err error) {
+	c.Set("logged_error", err)
+}
+
 // LogErrorWithMark logs an error and marks it as logged to prevent duplication
 func (l *Logger) LogErrorWithMark(c *gin.Context, err error) {
 	l.Error(c.Request.Context(), err)
-	l.ErrorLoki(c.Request.Context(), LevelError, err)
+	SetLoggedError(c, err)
 	MarkErrorLogged(c)
 }

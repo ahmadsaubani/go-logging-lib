@@ -103,36 +103,9 @@ func prettyStackList(skip, max int) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// LogErrorLoki logs an error in JSON format suitable for Loki
+// LogErrorLoki logs an error in JSON format suitable for Loki (deprecated, use LogLoki instead)
 func LogErrorLoki(ctx context.Context, service string, level string, err error, writer io.Writer) {
-	if err == nil {
-		return
-	}
-
-	meta, _ := FromContext(ctx)
-	_, file, line, _ := runtime.Caller(2)
-
-	ev := map[string]interface{}{
-		"ts":         time.Now().Format(time.RFC3339),
-		"level":      strings.ToUpper(level),
-		"service":    service,
-		"error":      err.Error(),
-		"request_id": meta.RequestID,
-		"http": map[string]string{
-			"method": meta.Method,
-			"path":   meta.Path,
-			"ip":     meta.IP,
-			"ua":     meta.UserAgent,
-		},
-		"source": map[string]interface{}{
-			"file": path.Base(file),
-			"line": line,
-		},
-		"stack": stackFrames(3, 6),
-	}
-
-	b, _ := jsonMarshal(ev)
-	writer.Write(append(b, '\n'))
+	LogLoki(ctx, service, level, 500, 0, err, writer)
 }
 
 // stackFrames returns stack trace as string slice
@@ -160,8 +133,14 @@ func stackFrames(skip, max int) []string {
 	return frames
 }
 
-// LogAccessLoki logs access request in JSON format suitable for Loki
+// LogAccessLoki logs access request in JSON format suitable for Loki (deprecated, use LogLoki instead)
 func LogAccessLoki(ctx context.Context, service string, level string, statusCode int, latency time.Duration, writer io.Writer) {
+	LogLoki(ctx, service, level, statusCode, latency, nil, writer)
+}
+
+// LogLoki logs in unified JSON format suitable for Loki/Grafana integration
+// Format is consistent regardless of success/error - errors field is null on success
+func LogLoki(ctx context.Context, service string, level string, statusCode int, latency time.Duration, err error, writer io.Writer) {
 	meta, _ := FromContext(ctx)
 
 	ev := map[string]interface{}{
@@ -177,6 +156,20 @@ func LogAccessLoki(ctx context.Context, service string, level string, statusCode
 			"ip":     meta.IP,
 			"ua":     meta.UserAgent,
 		},
+		"errors": nil,
+	}
+
+	// Add errors object if error exists
+	if err != nil {
+		_, file, line, _ := runtime.Caller(3)
+		ev["errors"] = map[string]interface{}{
+			"error": err.Error(),
+			"source": map[string]interface{}{
+				"file": path.Base(file),
+				"line": line,
+			},
+			"stack": stackFrames(4, 6),
+		}
 	}
 
 	b, _ := jsonMarshal(ev)

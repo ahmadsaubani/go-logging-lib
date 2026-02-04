@@ -60,7 +60,7 @@ func GinLogger(logger *logging.Logger) gin.HandlerFunc {
 		)
 		logger.Access(logLine)
 
-		// Log ke Loki untuk semua status code
+		// Determine log level based on status code
 		level := logging.LevelInfo
 		if statusCode >= 500 {
 			level = logging.LevelCritical
@@ -70,7 +70,22 @@ func GinLogger(logger *logging.Logger) gin.HandlerFunc {
 			level = logging.LevelWarn
 		}
 
-		logger.AccessLoki(c.Request.Context(), level, statusCode, latency)
+		// Get error if exists
+		var err error
+		if statusCode >= 400 {
+			if panicInfo, exists := c.Get("panic_info"); exists {
+				err = fmt.Errorf("%s", panicInfo.(string))
+			} else if len(c.Errors) > 0 {
+				err = fmt.Errorf("%s", c.Errors.String())
+			} else if errVal, exists := c.Get("logged_error"); exists {
+				if e, ok := errVal.(error); ok {
+					err = e
+				}
+			}
+		}
+
+		// Log ke Loki dengan format konsisten
+		logger.Loki(c.Request.Context(), level, statusCode, latency, err)
 	}
 }
 

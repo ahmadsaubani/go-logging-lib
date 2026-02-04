@@ -86,7 +86,7 @@ func (l *Logger) setupWriters() error {
 			return err
 		}
 
-		errorLokiWriter, err := NewDailyWriter(l.config.LogPath+".error-loki", l.config.EnableRotation)
+		errorLokiWriter, err := NewDailyWriter(l.config.LogPath+".loki", l.config.EnableRotation)
 		if err != nil {
 			return err
 		}
@@ -136,6 +136,11 @@ func (l *Logger) Access(msg string) {
 
 // LogRequest logs an HTTP request to access log and Loki (for non-Gin usage)
 func (l *Logger) LogRequest(ctx context.Context, statusCode int, latency time.Duration) {
+	l.LogRequestWithError(ctx, statusCode, latency, nil)
+}
+
+// LogRequestWithError logs an HTTP request with optional error to access log and Loki (for non-Gin usage)
+func (l *Logger) LogRequestWithError(ctx context.Context, statusCode int, latency time.Duration, err error) {
 	meta, ok := FromContext(ctx)
 	if !ok {
 		return
@@ -154,7 +159,7 @@ func (l *Logger) LogRequest(ctx context.Context, statusCode int, latency time.Du
 	)
 	l.accessLogger.Printf("%s", logLine)
 
-	// Log ke Loki
+	// Determine log level based on status code
 	level := LevelInfo
 	if statusCode >= 500 {
 		level = LevelCritical
@@ -164,7 +169,8 @@ func (l *Logger) LogRequest(ctx context.Context, statusCode int, latency time.Du
 		level = LevelWarn
 	}
 
-	LogAccessLoki(ctx, l.config.ServiceName, string(level), statusCode, latency, l.lokiWriter)
+	// Log ke Loki dengan format konsisten (errors=null jika tidak ada error)
+	LogLoki(ctx, l.config.ServiceName, string(level), statusCode, latency, err, l.lokiWriter)
 }
 
 // Error logs an error with context and marks it as manually logged
@@ -180,4 +186,9 @@ func (l *Logger) ErrorLoki(ctx context.Context, level LogLevel, err error) {
 // AccessLoki logs access request in Loki format for all status codes
 func (l *Logger) AccessLoki(ctx context.Context, level LogLevel, statusCode int, latency time.Duration) {
 	LogAccessLoki(ctx, l.config.ServiceName, string(level), statusCode, latency, l.lokiWriter)
+}
+
+// Loki logs in unified JSON format suitable for Loki/Grafana integration
+func (l *Logger) Loki(ctx context.Context, level LogLevel, statusCode int, latency time.Duration, err error) {
+	LogLoki(ctx, l.config.ServiceName, string(level), statusCode, latency, err, l.lokiWriter)
 }
