@@ -1,14 +1,15 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/ahmadsaubani/go-logging-lib"
 	"github.com/google/uuid"
 )
 
-// responseWriter wraps http.ResponseWriter to capture status code
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int
@@ -19,8 +20,34 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-// HTTPMiddleware returns standard http middleware for request logging
-// This is the basic/framework-agnostic alternative to GinMiddleware
+type requestState struct {
+	mu  sync.Mutex
+	err error
+}
+
+func (s *requestState) SetError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.err = err
+}
+
+func (s *requestState) GetError() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
+}
+
+type stateKey struct{}
+
+var reqStateKey = stateKey{}
+
+/**
+ * HTTPMiddleware returns standard http middleware for request logging.
+ * Framework-agnostic alternative to GinMiddleware.
+ *
+ * @param logger Logger instance
+ * @return func(http.Handler) http.Handler Middleware wrapper
+ */
 func HTTPMiddleware(logger *logging.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -37,7 +64,9 @@ func HTTPMiddleware(logger *logging.Logger) func(http.Handler) http.Handler {
 				UserAgent: r.UserAgent(),
 			}
 
+			state := &requestState{}
 			ctx := logging.WithMeta(r.Context(), meta)
+			ctx = context.WithValue(ctx, reqStateKey, state)
 			r = r.WithContext(ctx)
 			w.Header().Set("X-Request-ID", reqID)
 
@@ -46,14 +75,18 @@ func HTTPMiddleware(logger *logging.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// HTTPLogger returns standard http middleware that logs all requests
-// This is the basic/framework-agnostic alternative to GinLogger
+/**
+ * HTTPLogger returns standard http middleware that logs all requests.
+ * Framework-agnostic alternative to GinLogger.
+ *
+ * @param logger Logger instance
+ * @return func(http.Handler) http.Handler Middleware wrapper
+ */
 func HTTPLogger(logger *logging.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 
-			// Wrap response writer to capture status code
 			rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 
 			next.ServeHTTP(rw, r)
@@ -61,29 +94,31 @@ func HTTPLogger(logger *logging.Logger) func(http.Handler) http.Handler {
 			latency := time.Since(start)
 			statusCode := rw.statusCode
 
-			// Get error from context if exists
 			var err error
-			if e, ok := logging.ErrorFromContext(r.Context()); ok {
-				err = e
+			if state, ok := r.Context().Value(reqStateKey).(*requestState); ok && state != nil {
+				err = state.GetError()
 			}
 
-			// Log with consistent format (errors=null for success)
 			logger.LogRequestWithError(r.Context(), statusCode, latency, err)
 		})
 	}
 }
 
-// HTTPRecovery handles panic recovery for standard http handlers
-// This is the basic/framework-agnostic alternative to GinRecovery
+/**
+ * HTTPRecovery handles panic recovery for standard http handlers.
+ * Framework-agnostic alternative to GinRecovery.
+ *
+ * @param logger Logger instance
+ * @return func(http.Handler) http.Handler Recovery middleware wrapper
+ */
 func HTTPRecovery(logger *logging.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			defer func() {
 				if rec := recover(); rec != nil {
-					// Store panic as error in context for logging
-					ctx := logging.WithError(r.Context(), errFromPanic(rec))
-					r = r.WithContext(ctx)
-
+					if state, ok := r.Context().Value(reqStateKey).(*requestState); ok && state != nil {
+						state.SetError(errFromPanic(rec))
+					}
 					http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 				}
 			}()
@@ -93,7 +128,19 @@ func HTTPRecovery(logger *logging.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// getClientIP extracts client IP from request
+/**
+ * SetHTTPError stores an error in the request state for logging.
+ * Use this in handlers to pass errors to the logging middleware.
+ *
+ * @param r HTTP request
+ * @param err Error to store
+ */
+func SetHTTPError(r *http.Request, err error) {
+	if state, ok := r.Context().Value(reqStateKey).(*requestState); ok && state != nil {
+		state.SetError(err)
+	}
+}
+
 func getClientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		return xff
@@ -104,7 +151,6 @@ func getClientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-// errFromPanic converts panic value to error
 func errFromPanic(rec interface{}) error {
 	switch v := rec.(type) {
 	case error:

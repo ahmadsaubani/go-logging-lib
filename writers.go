@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// DailyWriter implements daily log rotation
 type DailyWriter struct {
 	mu             sync.Mutex
 	basePath       string
@@ -16,7 +15,15 @@ type DailyWriter struct {
 	enableRotation bool
 }
 
-// NewDailyWriter creates a new daily rotating writer
+/**
+ * NewDailyWriter creates a new daily rotating writer.
+ * When rotation is enabled, creates a new file each day with date suffix.
+ *
+ * @param basePath Base path for log files (without extension)
+ * @param enableRotation Enable daily file rotation
+ * @return *DailyWriter Rotating file writer
+ * @return error Error if file creation fails
+ */
 func NewDailyWriter(basePath string, enableRotation bool) (*DailyWriter, error) {
 	w := &DailyWriter{
 		basePath:       basePath,
@@ -28,7 +35,6 @@ func NewDailyWriter(basePath string, enableRotation bool) (*DailyWriter, error) 
 	return w, nil
 }
 
-// Write implements the io.Writer interface
 func (w *DailyWriter) Write(p []byte) (n int, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -39,11 +45,9 @@ func (w *DailyWriter) Write(p []byte) (n int, err error) {
 	return w.file.Write(p)
 }
 
-// rotateIfNeeded rotates the log file if the date has changed (when rotation is enabled)
 func (w *DailyWriter) rotateIfNeeded() error {
 	today := time.Now().Format("2006-01-02")
 
-	// If rotation is disabled, only open file once
 	if !w.enableRotation {
 		if w.file != nil {
 			return nil
@@ -51,7 +55,6 @@ func (w *DailyWriter) rotateIfNeeded() error {
 		return w.openFile(w.basePath + ".log")
 	}
 
-	// Daily rotation logic
 	if w.file != nil && w.current == today {
 		return nil
 	}
@@ -69,7 +72,6 @@ func (w *DailyWriter) rotateIfNeeded() error {
 	return nil
 }
 
-// openFile opens the specified file
 func (w *DailyWriter) openFile(filename string) error {
 	dir := filepath.Dir(w.basePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -89,11 +91,10 @@ func (w *DailyWriter) openFile(filename string) error {
 	return nil
 }
 
-// Close closes the current file
 func (w *DailyWriter) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	
+
 	if w.file != nil {
 		return w.file.Close()
 	}

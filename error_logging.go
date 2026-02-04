@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-// LogError logs an error with detailed context information
 func LogError(ctx context.Context, err error, errorLogger *log.Logger) {
 	if err == nil {
 		return
@@ -69,7 +68,6 @@ STACK  :
 	)
 }
 
-// printRaw prints a message without timestamp/file info
 func printRaw(l *log.Logger, s string) {
 	oldFlags := l.Flags()
 	l.SetFlags(0)
@@ -77,7 +75,6 @@ func printRaw(l *log.Logger, s string) {
 	l.SetFlags(oldFlags)
 }
 
-// prettyStackList formats stack trace for readable output
 func prettyStackList(skip, max int) string {
 	var b strings.Builder
 
@@ -103,12 +100,10 @@ func prettyStackList(skip, max int) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// LogErrorLoki logs an error in JSON format suitable for Loki (deprecated, use LogLoki instead)
 func LogErrorLoki(ctx context.Context, service string, level string, err error, writer io.Writer) {
 	LogLoki(ctx, service, level, 500, 0, err, writer)
 }
 
-// stackFrames returns stack trace as string slice
 func stackFrames(skip, max int) []string {
 	var frames []string
 
@@ -133,13 +128,22 @@ func stackFrames(skip, max int) []string {
 	return frames
 }
 
-// LogAccessLoki logs access request in JSON format suitable for Loki (deprecated, use LogLoki instead)
 func LogAccessLoki(ctx context.Context, service string, level string, statusCode int, latency time.Duration, writer io.Writer) {
 	LogLoki(ctx, service, level, statusCode, latency, nil, writer)
 }
 
-// LogLoki logs in unified JSON format suitable for Loki/Grafana integration
-// Format is consistent regardless of success/error - errors field is null on success
+/**
+ * LogLoki logs in unified JSON format suitable for Loki/Grafana integration.
+ * Format is consistent regardless of success/error - errors field is null on success.
+ *
+ * @param ctx Context containing request metadata
+ * @param service Service name for identification
+ * @param level Log level (INFO, WARN, ERROR, CRITICAL)
+ * @param statusCode HTTP response status code
+ * @param latency Request processing duration
+ * @param err Optional error (null in output if nil)
+ * @param writer Output writer for log entry
+ */
 func LogLoki(ctx context.Context, service string, level string, statusCode int, latency time.Duration, err error, writer io.Writer) {
 	meta, _ := FromContext(ctx)
 
@@ -159,7 +163,6 @@ func LogLoki(ctx context.Context, service string, level string, statusCode int, 
 		"errors": nil,
 	}
 
-	// Add errors object if error exists
 	if err != nil {
 		_, file, line, _ := runtime.Caller(3)
 		ev["errors"] = map[string]interface{}{
