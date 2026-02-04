@@ -13,7 +13,8 @@ func main() {
 	// Initialize logger
 	config := &logging.Config{
 		ServiceName:    "gin-example",
-		LogPath:        "./logs/gin-app",
+		LogPath:        "./logs",
+		FilePrefix:     "gin-app",
 		EnableStdout:   true,
 		EnableFile:     true,
 		EnableLoki:     true,

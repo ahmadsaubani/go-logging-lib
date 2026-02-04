@@ -14,7 +14,8 @@ func main() {
 	// Initialize logger with configuration
 	config := &logging.Config{
 		ServiceName:    "example-basic-app",
-		LogPath:        "./logs/example",
+		LogPath:        "./logs",
+		FilePrefix:     "example",
 		EnableStdout:   true,
 		EnableFile:     true,
 		EnableLoki:     true,

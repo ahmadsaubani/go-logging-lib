@@ -31,6 +31,7 @@ type Logger struct {
 type Config struct {
 	ServiceName    string `yaml:"service_name"`
 	LogPath        string `yaml:"log_path"`
+	FilePrefix     string `yaml:"file_prefix"`
 	EnableStdout   bool   `yaml:"enable_stdout"`
 	EnableFile     bool   `yaml:"enable_file"`
 	EnableLoki     bool   `yaml:"enable_loki"`
@@ -67,6 +68,15 @@ func (l *Logger) setupWriters() error {
 	var errorWriters []io.Writer
 	var lokiWriters []io.Writer
 
+	// Set default file prefix if not specified
+	filePrefix := l.config.FilePrefix
+	if filePrefix == "" {
+		filePrefix = "app"
+	}
+
+	// Build base path: LogPath/FilePrefix
+	basePath := l.config.LogPath + "/" + filePrefix
+
 	// Stdout writers
 	if l.config.EnableStdout {
 		accessWriters = append(accessWriters, log.Writer())
@@ -76,17 +86,17 @@ func (l *Logger) setupWriters() error {
 
 	// File writers
 	if l.config.EnableFile {
-		accessWriter, err := NewDailyWriter(l.config.LogPath+".access", l.config.EnableRotation)
+		accessWriter, err := NewDailyWriter(basePath+".access", l.config.EnableRotation)
 		if err != nil {
 			return err
 		}
 
-		errorWriter, err := NewDailyWriter(l.config.LogPath+".error", l.config.EnableRotation)
+		errorWriter, err := NewDailyWriter(basePath+".error", l.config.EnableRotation)
 		if err != nil {
 			return err
 		}
 
-		errorLokiWriter, err := NewDailyWriter(l.config.LogPath+".loki", l.config.EnableRotation)
+		errorLokiWriter, err := NewDailyWriter(basePath+".loki", l.config.EnableRotation)
 		if err != nil {
 			return err
 		}

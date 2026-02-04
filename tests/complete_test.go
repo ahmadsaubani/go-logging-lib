@@ -45,7 +45,8 @@ func TestBasicAndGinLogging(t *testing.T) {
 		
 		config := &logging.Config{
 			ServiceName:    "basic-example",
-			LogPath:        basicLogDir + "/app",
+			LogPath:        basicLogDir,
+			FilePrefix:     "app",
 			EnableStdout:   true,
 			EnableFile:     true,
 			EnableLoki:     true,
@@ -221,7 +222,8 @@ func TestBasicAndGinLogging(t *testing.T) {
 		
 		config := &logging.Config{
 			ServiceName:    "gin-example",
-			LogPath:        ginLogDir + "/gin-app",
+			LogPath:        ginLogDir,
+			FilePrefix:     "gin-app",
 			EnableStdout:   true,
 			EnableFile:     true,
 			EnableLoki:     true,
@@ -406,7 +408,8 @@ func TestLoggingWithoutRotation(t *testing.T) {
 
 		config := &logging.Config{
 			ServiceName:    "no-rotate-example",
-			LogPath:        basicLogDir + "/no-rotate",
+			LogPath:        basicLogDir,
+			FilePrefix:     "no-rotate",
 			EnableStdout:   true,
 			EnableFile:     true,
 			EnableLoki:     true,
@@ -570,7 +573,8 @@ func TestLoggingWithoutRotation(t *testing.T) {
 
 		config := &logging.Config{
 			ServiceName:    "gin-no-rotate-example",
-			LogPath:        ginLogDir + "/gin-no-rotate",
+			LogPath:        ginLogDir,
+			FilePrefix:     "gin-no-rotate",
 			EnableStdout:   true,
 			EnableFile:     true,
 			EnableLoki:     true,
@@ -744,14 +748,15 @@ func TestHTTPMiddleware(t *testing.T) {
 		// Ensure directory exists
 		os.MkdirAll(basicLogDir, 0755)
 
-		// Clean previous test files
+		// Clean previous test files (now in subdirectory format: LogPath/FilePrefix.type.log)
 		os.Remove(basicLogDir + "/http-test.access.log")
 		os.Remove(basicLogDir + "/http-test.error.log")
 		os.Remove(basicLogDir + "/http-test.loki.log")
 
 		config := &logging.Config{
 			ServiceName:    "http-middleware-example",
-			LogPath:        basicLogDir + "/http-test",
+			LogPath:        basicLogDir,
+			FilePrefix:     "http-test",
 			EnableStdout:   true,
 			EnableFile:     true,
 			EnableLoki:     true,
@@ -897,7 +902,8 @@ func TestLokiFormatConsistency(t *testing.T) {
 
 		config := &logging.Config{
 			ServiceName:    "loki-format-test",
-			LogPath:        basicLogDir + "/loki-test",
+			LogPath:        basicLogDir,
+			FilePrefix:     "loki-test",
 			EnableStdout:   false,
 			EnableFile:     true,
 			EnableLoki:     true,
