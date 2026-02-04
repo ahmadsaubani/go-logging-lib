@@ -2,8 +2,10 @@ package logging
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
+	"time"
 )
 
 // LogLevel represents the severity of a log entry
@@ -27,22 +29,24 @@ type Logger struct {
 
 // Config holds logger configuration
 type Config struct {
-	ServiceName string
-	LogPath     string
-	EnableStdout bool
-	EnableFile   bool
-	EnableLoki   bool
+	ServiceName    string `yaml:"service_name"`
+	LogPath        string `yaml:"log_path"`
+	EnableStdout   bool   `yaml:"enable_stdout"`
+	EnableFile     bool   `yaml:"enable_file"`
+	EnableLoki     bool   `yaml:"enable_loki"`
+	EnableRotation bool   `yaml:"enable_rotation"`
 }
 
 // New creates a new logger instance
 func New(config *Config) (*Logger, error) {
 	if config == nil {
 		config = &Config{
-			ServiceName:  "app",
-			LogPath:      "./logs/app",
-			EnableStdout: true,
-			EnableFile:   true,
-			EnableLoki:   false,
+			ServiceName:    "app",
+			LogPath:        "./logs/app",
+			EnableStdout:   true,
+			EnableFile:     true,
+			EnableLoki:     false,
+			EnableRotation: true,
 		}
 	}
 
@@ -72,17 +76,17 @@ func (l *Logger) setupWriters() error {
 
 	// File writers
 	if l.config.EnableFile {
-		accessWriter, err := NewDailyWriter(l.config.LogPath + ".access")
-		if err != nil {
-			return err
-		}
-		
-		errorWriter, err := NewDailyWriter(l.config.LogPath + ".error")
+		accessWriter, err := NewDailyWriter(l.config.LogPath+".access", l.config.EnableRotation)
 		if err != nil {
 			return err
 		}
 
-		errorLokiWriter, err := NewDailyWriter(l.config.LogPath + ".error-loki")
+		errorWriter, err := NewDailyWriter(l.config.LogPath+".error", l.config.EnableRotation)
+		if err != nil {
+			return err
+		}
+
+		errorLokiWriter, err := NewDailyWriter(l.config.LogPath+".error-loki", l.config.EnableRotation)
 		if err != nil {
 			return err
 		}
@@ -125,6 +129,44 @@ func (l *Logger) Info(msg string) {
 	l.accessLogger.Printf("[INFO] %s", msg)
 }
 
+// Access logs an access request message
+func (l *Logger) Access(msg string) {
+	l.accessLogger.Printf("%s", msg)
+}
+
+// LogRequest logs an HTTP request to access log and Loki (for non-Gin usage)
+func (l *Logger) LogRequest(ctx context.Context, statusCode int, latency time.Duration) {
+	meta, ok := FromContext(ctx)
+	if !ok {
+		return
+	}
+
+	// Log ke access log
+	logLine := fmt.Sprintf(
+		"[REQ:%s] %s | %3d | %13v | %15s | %-7s %s",
+		meta.RequestID,
+		time.Now().Format(time.RFC3339),
+		statusCode,
+		latency,
+		meta.IP,
+		meta.Method,
+		meta.Path,
+	)
+	l.accessLogger.Printf("%s", logLine)
+
+	// Log ke Loki
+	level := LevelInfo
+	if statusCode >= 500 {
+		level = LevelCritical
+	} else if statusCode >= 400 {
+		level = LevelError
+	} else if statusCode >= 300 {
+		level = LevelWarn
+	}
+
+	LogAccessLoki(ctx, l.config.ServiceName, string(level), statusCode, latency, l.lokiWriter)
+}
+
 // Error logs an error with context and marks it as manually logged
 func (l *Logger) Error(ctx context.Context, err error) {
 	LogError(ctx, err, l.errorLogger)
@@ -133,4 +175,9 @@ func (l *Logger) Error(ctx context.Context, err error) {
 // ErrorLoki logs an error in Loki format
 func (l *Logger) ErrorLoki(ctx context.Context, level LogLevel, err error) {
 	LogErrorLoki(ctx, l.config.ServiceName, string(level), err, l.lokiWriter)
+}
+
+// AccessLoki logs access request in Loki format for all status codes
+func (l *Logger) AccessLoki(ctx context.Context, level LogLevel, statusCode int, latency time.Duration) {
+	LogAccessLoki(ctx, l.config.ServiceName, string(level), statusCode, latency, l.lokiWriter)
 }

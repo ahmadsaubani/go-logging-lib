@@ -9,16 +9,18 @@ import (
 
 // DailyWriter implements daily log rotation
 type DailyWriter struct {
-	mu       sync.Mutex
-	basePath string
-	file     *os.File
-	current  string
+	mu             sync.Mutex
+	basePath       string
+	file           *os.File
+	current        string
+	enableRotation bool
 }
 
 // NewDailyWriter creates a new daily rotating writer
-func NewDailyWriter(basePath string) (*DailyWriter, error) {
+func NewDailyWriter(basePath string, enableRotation bool) (*DailyWriter, error) {
 	w := &DailyWriter{
-		basePath: basePath,
+		basePath:       basePath,
+		enableRotation: enableRotation,
 	}
 	if err := w.rotateIfNeeded(); err != nil {
 		return nil, err
@@ -37,10 +39,19 @@ func (w *DailyWriter) Write(p []byte) (n int, err error) {
 	return w.file.Write(p)
 }
 
-// rotateIfNeeded rotates the log file if the date has changed
+// rotateIfNeeded rotates the log file if the date has changed (when rotation is enabled)
 func (w *DailyWriter) rotateIfNeeded() error {
 	today := time.Now().Format("2006-01-02")
 
+	// If rotation is disabled, only open file once
+	if !w.enableRotation {
+		if w.file != nil {
+			return nil
+		}
+		return w.openFile(w.basePath + ".log")
+	}
+
+	// Daily rotation logic
 	if w.file != nil && w.current == today {
 		return nil
 	}
@@ -49,12 +60,22 @@ func (w *DailyWriter) rotateIfNeeded() error {
 		_ = w.file.Close()
 	}
 
+	filename := w.basePath + "-" + today + ".log"
+	if err := w.openFile(filename); err != nil {
+		return err
+	}
+
+	w.current = today
+	return nil
+}
+
+// openFile opens the specified file
+func (w *DailyWriter) openFile(filename string) error {
 	dir := filepath.Dir(w.basePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
 
-	filename := w.basePath + "-" + today + ".log"
 	file, err := os.OpenFile(
 		filename,
 		os.O_CREATE|os.O_APPEND|os.O_WRONLY,
@@ -65,7 +86,6 @@ func (w *DailyWriter) rotateIfNeeded() error {
 	}
 
 	w.file = file
-	w.current = today
 	return nil
 }
 

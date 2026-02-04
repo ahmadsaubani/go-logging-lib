@@ -159,3 +159,26 @@ func stackFrames(skip, max int) []string {
 
 	return frames
 }
+
+// LogAccessLoki logs access request in JSON format suitable for Loki
+func LogAccessLoki(ctx context.Context, service string, level string, statusCode int, latency time.Duration, writer io.Writer) {
+	meta, _ := FromContext(ctx)
+
+	ev := map[string]interface{}{
+		"ts":          time.Now().Format(time.RFC3339),
+		"level":       strings.ToUpper(level),
+		"service":     service,
+		"request_id":  meta.RequestID,
+		"status_code": statusCode,
+		"latency_ms":  latency.Milliseconds(),
+		"http": map[string]string{
+			"method": meta.Method,
+			"path":   meta.Path,
+			"ip":     meta.IP,
+			"ua":     meta.UserAgent,
+		},
+	}
+
+	b, _ := jsonMarshal(ev)
+	writer.Write(append(b, '\n'))
+}

@@ -33,31 +33,48 @@ func GinMiddleware(logger *logging.Logger) gin.HandlerFunc {
 	}
 }
 
-// GinLogger returns Gin logger middleware
+// GinLogger returns Gin logger middleware that logs all requests to access log
 func GinLogger(logger *logging.Logger) gin.HandlerFunc {
-	return gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
-		if param.StatusCode >= 400 {
-			return ""
-		}
-		meta, ok := logging.FromContext(param.Request.Context())
+	return func(c *gin.Context) {
+		start := time.Now()
+		c.Next()
+		latency := time.Since(start)
+
+		meta, ok := logging.FromContext(c.Request.Context())
 		if !ok {
-			return ""
+			return
 		}
 
-		return fmt.Sprintf(
-			"[REQ:%s] %s | %3d | %13v | %15s | %-7s %s\n",
+		statusCode := c.Writer.Status()
+
+		// Log ke access log untuk semua request
+		logLine := fmt.Sprintf(
+			"[REQ:%s] %s | %3d | %13v | %15s | %-7s %s",
 			meta.RequestID,
-			param.TimeStamp.Format(time.RFC3339),
-			param.StatusCode,
-			param.Latency,
+			time.Now().Format(time.RFC3339),
+			statusCode,
+			latency,
 			meta.IP,
 			meta.Method,
 			meta.Path,
 		)
-	})
+		logger.Access(logLine)
+
+		// Log ke Loki untuk semua status code
+		level := logging.LevelInfo
+		if statusCode >= 500 {
+			level = logging.LevelCritical
+		} else if statusCode >= 400 {
+			level = logging.LevelError
+		} else if statusCode >= 300 {
+			level = logging.LevelWarn
+		}
+
+		logger.AccessLoki(c.Request.Context(), level, statusCode, latency)
+	}
 }
 
-// GinHTTPErrorLogger logs HTTP errors with Loki format
+// GinHTTPErrorLogger logs HTTP errors to error log
 func GinHTTPErrorLogger(logger *logging.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
@@ -74,7 +91,7 @@ func GinHTTPErrorLogger(logger *logging.Logger) gin.HandlerFunc {
 		}
 
 		errMsg := "HTTP Error"
-		
+
 		// Check if this is from a panic
 		if panicInfo, exists := c.Get("panic_info"); exists {
 			errMsg = panicInfo.(string)
@@ -82,18 +99,9 @@ func GinHTTPErrorLogger(logger *logging.Logger) gin.HandlerFunc {
 			errMsg = c.Errors.String()
 		}
 
-		// Log with detailed format
+		// Log with detailed format to error log only
 		httpErr := fmt.Errorf("%s (status: %d, latency: %v)", errMsg, status, time.Since(start))
-		
-		// Use the same detailed error logging as basic
 		logger.Error(c.Request.Context(), httpErr)
-		
-		// Also log in Loki format
-		if status >= 500 {
-			logger.ErrorLoki(c.Request.Context(), logging.LevelCritical, httpErr)
-		} else {
-			logger.ErrorLoki(c.Request.Context(), logging.LevelError, httpErr)
-		}
 	}
 }
 

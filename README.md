@@ -1,54 +1,71 @@
-# Go Logging Library 🚀
+# Go Logging Library
 
-[![Go Version](https://img.shields.io/badge/go-%3E%3D1.21-blue.svg)](https://golang.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+A production-ready Go logging library with optional daily rotation, multi-format output, and native Gin framework integration.
 
-A comprehensive, production-ready Go logging library with daily rotation, multi-format output, and **native Gin framework integration**. Other frameworks supported via manual implementation patterns.
+## Features
 
-## 🌟 Features
+- **Daily Log Rotation**: Optional automatic dated log files with thread-safe operations
+- **Multi-format Output**: Console, file, and JSON/Loki formats simultaneously
+- **Native Gin Integration**: Complete middleware suite with anti-duplication mechanisms
+- **Context-aware Logging**: Request metadata injection for structured logging
+- **Advanced Error Handling**: Stack traces, request context, error categorization
+- **Thread-safe**: Built for concurrent high-performance applications
 
-- **📅 Daily Log Rotation**: Automatic dated log files with thread-safe operations
-- **🎯 Multi-format Output**: Console, file, and JSON/Loki formats simultaneously  
-- **🚀 Native Gin Integration**: Complete middleware suite with anti-duplication mechanisms
-- **📡 Context-aware Logging**: Request metadata injection for structured logging
-- **🔍 Advanced Error Handling**: Stack traces, request context, error categorization
-- **⚡ Thread-safe**: Built for concurrent high-performance applications
-- **🧪 Battle-tested**: Comprehensive test suite with actual file verification
-- **🔧 Framework Agnostic**: Core logging works with any framework, native middleware for Gin only
-
----
-
-## 📦 Installation
+## Installation
 
 ```bash
 go get github.com/ahmadsaubani/go-logging-lib
 ```
 
-For Gin projects (recommended):
+For Gin projects:
 ```bash
 go get github.com/ahmadsaubani/go-logging-lib
 go get github.com/gin-gonic/gin
 ```
 
----
+## Configuration
 
-## 🎯 Framework Support
+```go
+type Config struct {
+    ServiceName    string `yaml:"service_name"`    // Service name for logs
+    LogPath        string `yaml:"log_path"`        // Base path for log files
+    EnableStdout   bool   `yaml:"enable_stdout"`   // Output to console
+    EnableFile     bool   `yaml:"enable_file"`     // Output to files
+    EnableLoki     bool   `yaml:"enable_loki"`     // Output JSON format for Loki
+    EnableRotation bool   `yaml:"enable_rotation"` // Enable daily log rotation
+}
+```
 
-| Framework | Support Level | Middleware Available | Implementation |
-|-----------|---------------|---------------------|----------------|
-| **Gin** | ✅ **Native** | ✅ Built-in | `middleware/gin` package |
-| Chi | 🔧 Manual | ❌ Pattern only | Manual implementation required |
-| Echo | 🔧 Manual | ❌ Pattern only | Manual implementation required |
-| Fiber | 🔧 Manual | ❌ Pattern only | Manual implementation required |
-| Standard `net/http` | 🔧 Manual | ❌ Pattern only | Manual implementation required |
+### Log Files Generated
 
-**Recommendation**: Use **Gin** for best experience with native middleware support and anti-duplication features.
+When `EnableRotation: true`:
+```
+logs/
+  app.access-2026-02-04.log      # Access logs with date
+  app.error-2026-02-04.log       # Error logs with date
+  app.error-loki-2026-02-04.log  # JSON logs with date
+```
 
----
+When `EnableRotation: false`:
+```
+logs/
+  app.access.log       # Single access log file
+  app.error.log        # Single error log file
+  app.error-loki.log   # Single JSON log file
+```
 
-## 🚀 Quick Start Examples
+### YAML Configuration Example
 
-### 1. Basic Console/CLI Application
+```yaml
+service_name: "my-api"
+log_path: "./logs/app"
+enable_stdout: true
+enable_file: true
+enable_loki: true
+enable_rotation: true
+```
+
+## Usage Without Gin (Basic/CLI Application)
 
 ```go
 package main
@@ -56,78 +73,101 @@ package main
 import (
     "context"
     "errors"
-    "fmt"
-    
+    "time"
+
     logging "github.com/ahmadsaubani/go-logging-lib"
 )
 
 func main() {
-    // Simple configuration
     config := &logging.Config{
-        ServiceName:  "my-cli-app",
-        LogPath:      "./logs/app",
-        EnableStdout: true,  // Show in console
-        EnableFile:   true,  // Save to files
-        EnableLoki:   false, // Skip JSON format for simple apps
+        ServiceName:    "my-cli-app",
+        LogPath:        "./logs/app",
+        EnableStdout:   true,
+        EnableFile:     true,
+        EnableLoki:     true,
+        EnableRotation: true,
     }
 
     logger, err := logging.New(config)
     if err != nil {
-        panic(fmt.Sprintf("Failed to create logger: %v", err))
+        panic(err)
     }
 
-    // Basic logging
-    logger.Info("🚀 Application started")
-    logger.Info("📊 Loading configuration...")
-    logger.Info("✅ Ready to process requests")
+    // Info logging
+    logger.Info("Application started")
+    logger.Info("Processing data...")
 
-    // Error logging with context metadata
+    // Create context with request metadata
     ctx := logging.WithMeta(context.Background(), logging.Meta{
-        RequestID: "cli-001",
-        IP:        "localhost",
-        UserAgent: "CLI-App/1.0",
+        RequestID: "req-001",
+        IP:        "127.0.0.1",
+        Method:    "GET",
+        Path:      "/api/users",
+        UserAgent: "MyApp/1.0",
     })
 
-    // Simulate an error
-    if err := processData(); err != nil {
-        logger.Error(ctx, err)
-    }
+    // Log HTTP request (simulated)
+    logger.LogRequest(ctx, 200, 50*time.Millisecond)
 
-    // JSON formatted error for monitoring
-    criticalErr := errors.New("database connection lost")
-    logger.ErrorLoki(ctx, logging.LevelCritical, criticalErr)
+    // Log another request with different status
+    ctx2 := logging.WithMeta(context.Background(), logging.Meta{
+        RequestID: "req-002",
+        IP:        "127.0.0.1",
+        Method:    "POST",
+        Path:      "/api/data",
+        UserAgent: "MyApp/1.0",
+    })
+    logger.LogRequest(ctx2, 500, 200*time.Millisecond)
 
-    logger.Info("🏁 Application finished")
-}
+    // Error logging with context
+    dbErr := errors.New("database connection failed")
+    logger.Error(ctx, dbErr)
 
-func processData() error {
-    return errors.New("failed to connect to database")
+    // JSON error logging for Loki/monitoring
+    logger.ErrorLoki(ctx, logging.LevelCritical, dbErr)
+
+    logger.Info("Application finished")
 }
 ```
 
-### 2. Web API with Gin Framework (Complete Example)
+### Output Example (Access Log)
+
+```
+2026/02/04 12:00:00 logger.go:129: [INFO] Application started
+2026/02/04 12:00:00 logger.go:129: [INFO] Processing data...
+2026/02/04 12:00:00 logger.go:155: [REQ:req-001] 2026-02-04T12:00:00+07:00 | 200 |          50ms |       127.0.0.1 | GET     /api/users
+2026/02/04 12:00:00 logger.go:155: [REQ:req-002] 2026-02-04T12:00:00+07:00 | 500 |         200ms |       127.0.0.1 | POST    /api/data
+2026/02/04 12:00:00 logger.go:129: [INFO] Application finished
+```
+
+### Output Example (Loki JSON Log)
+
+```json
+{"http":{"ip":"127.0.0.1","method":"GET","path":"/api/users","ua":"MyApp/1.0"},"latency_ms":50,"level":"INFO","request_id":"req-001","service":"my-cli-app","status_code":200,"ts":"2026-02-04T12:00:00+07:00"}
+{"http":{"ip":"127.0.0.1","method":"POST","path":"/api/data","ua":"MyApp/1.0"},"latency_ms":200,"level":"CRITICAL","request_id":"req-002","service":"my-cli-app","status_code":500,"ts":"2026-02-04T12:00:00+07:00"}
+```
+
+## Usage With Gin Framework
 
 ```go
 package main
 
 import (
     "errors"
-    "fmt"
-    "time"
-    
+
     "github.com/gin-gonic/gin"
     logging "github.com/ahmadsaubani/go-logging-lib"
     "github.com/ahmadsaubani/go-logging-lib/middleware"
 )
 
 func main() {
-    // Production-ready configuration
     config := &logging.Config{
-        ServiceName:  "user-api",
-        LogPath:      "./logs/api",
-        EnableStdout: true,
-        EnableFile:   true,
-        EnableLoki:   true, // Enable for monitoring
+        ServiceName:    "my-api",
+        LogPath:        "./logs/api",
+        EnableStdout:   true,
+        EnableFile:     true,
+        EnableLoki:     true,
+        EnableRotation: true,
     }
 
     logger, err := logging.New(config)
@@ -136,1100 +176,150 @@ func main() {
     }
 
     r := gin.New()
-    
-    // 🔥 CRITICAL: Middleware order matters!
-    r.Use(middleware.GinMiddleware(logger))      // 1. Request metadata injection
-    r.Use(middleware.GinLogger(logger))         // 2. Request/response logging
-    r.Use(middleware.GinHTTPErrorLogger(logger)) // 3. Auto-error logging
-    r.Use(middleware.GinRecovery(logger))       // 4. Panic recovery
 
-    // API Routes
-    api := r.Group("/api/v1")
-    {
-        api.GET("/health", healthCheck(logger))
-        api.GET("/users", getUsers(logger))
-        api.POST("/users", createUser(logger))
-        api.GET("/users/:id", getUser(logger))
-        api.DELETE("/users/:id", deleteUser(logger))
-    }
+    // Middleware order is important!
+    r.Use(middleware.GinMiddleware(logger))       // 1. Request metadata injection
+    r.Use(middleware.GinLogger(logger))           // 2. Access logging (all status codes)
+    r.Use(middleware.GinHTTPErrorLogger(logger))  // 3. Error logging (4xx, 5xx)
+    r.Use(middleware.GinRecovery(logger))         // 4. Panic recovery
 
-    // Error simulation endpoints for testing
+    // Routes
+    r.GET("/", func(c *gin.Context) {
+        logger.Info("Home endpoint accessed")
+        c.JSON(200, gin.H{"message": "Hello World"})
+    })
+
+    r.GET("/users", func(c *gin.Context) {
+        logger.Info("Fetching users")
+        c.JSON(200, gin.H{"users": []string{"alice", "bob"}})
+    })
+
+    r.POST("/users", func(c *gin.Context) {
+        logger.Info("Creating user")
+        c.JSON(201, gin.H{"message": "User created"})
+    })
+
+    // Manual error logging with anti-duplication
     r.GET("/error", func(c *gin.Context) {
-        err := errors.New("simulated business logic error")
+        err := errors.New("something went wrong")
         logger.LogErrorWithMark(c, err) // Prevents duplicate logging
         c.JSON(500, gin.H{"error": "Internal server error"})
     })
 
+    // Auto error logging (handled by GinHTTPErrorLogger)
+    r.GET("/not-found", func(c *gin.Context) {
+        c.JSON(404, gin.H{"error": "Resource not found"})
+    })
+
+    // Panic recovery test
     r.GET("/panic", func(c *gin.Context) {
-        panic("simulated server panic") // Will be caught by recovery middleware
+        panic("unexpected error")
     })
 
-    logger.Info("🌐 Starting server on :8080")
+    logger.Info("Starting server on :8080")
     r.Run(":8080")
-}
-
-func healthCheck(logger *logging.Logger) gin.HandlerFunc {
-    return func(c *gin.Context) {
-        logger.Info("🏥 Health check requested")
-        c.JSON(200, gin.H{
-            "status":    "healthy",
-            "service":   "user-api",
-            "version":   "1.0.0",
-            "timestamp": time.Now().Format(time.RFC3339),
-        })
-    }
-}
-
-func getUsers(logger *logging.Logger) gin.HandlerFunc {
-    return func(c *gin.Context) {
-        logger.Info("👥 Fetching users list")
-        
-        // Simulate database call
-        users := []map[string]interface{}{
-            {"id": 1, "name": "Alice Johnson", "email": "alice@example.com"},
-            {"id": 2, "name": "Bob Smith", "email": "bob@example.com"},
-            {"id": 3, "name": "Charlie Brown", "email": "charlie@example.com"},
-        }
-        
-        logger.Info(fmt.Sprintf("📊 Retrieved %d users", len(users)))
-        c.JSON(200, gin.H{"users": users, "count": len(users)})
-    }
-}
-
-func createUser(logger *logging.Logger) gin.HandlerFunc {
-    return func(c *gin.Context) {
-        var user struct {
-            Name  string `json:"name" binding:"required"`
-            Email string `json:"email" binding:"required,email"`
-        }
-
-        if err := c.ShouldBindJSON(&user); err != nil {
-            logger.LogErrorWithMark(c, err)
-            c.JSON(400, gin.H{"error": "Invalid input", "details": err.Error()})
-            return
-        }
-
-        logger.Info(fmt.Sprintf("➕ Creating user: %s <%s>", user.Name, user.Email))
-        
-        // Simulate user creation
-        newUser := map[string]interface{}{
-            "id":    4,
-            "name":  user.Name,
-            "email": user.Email,
-        }
-
-        c.JSON(201, gin.H{"user": newUser, "message": "User created successfully"})
-    }
-}
-
-func getUser(logger *logging.Logger) gin.HandlerFunc {
-    return func(c *gin.Context) {
-        userID := c.Param("id")
-        logger.Info(fmt.Sprintf("🔍 Fetching user ID: %s", userID))
-        
-        // Simulate user lookup
-        if userID == "999" {
-            err := errors.New("user not found in database")
-            logger.LogErrorWithMark(c, err)
-            c.JSON(404, gin.H{"error": "User not found"})
-            return
-        }
-        
-        user := map[string]interface{}{
-            "id":    userID,
-            "name":  "Sample User",
-            "email": "sample@example.com",
-        }
-        
-        c.JSON(200, gin.H{"user": user})
-    }
-}
-
-func deleteUser(logger *logging.Logger) gin.HandlerFunc {
-    return func(c *gin.Context) {
-        userID := c.Param("id")
-        logger.Info(fmt.Sprintf("🗑️ Deleting user ID: %s", userID))
-        
-        // Simulate critical operation with monitoring
-        if userID == "admin" {
-            err := errors.New("attempt to delete admin user blocked")
-            logger.ErrorLoki(c.Request.Context(), logging.LevelCritical, err)
-            c.JSON(403, gin.H{"error": "Cannot delete admin user"})
-            return
-        }
-        
-        c.JSON(200, gin.H{"message": "User deleted successfully"})
-    }
-}
-```
-
----
-
-## 🏗️ Non-Gin Framework Integration
-
-**Note**: This library has **native Gin middleware**, but can be used with other frameworks using standard Go patterns:
-
-### Manual Implementation for Other Frameworks (Chi, Echo, Fiber)
-
-**Important**: This library provides **native middleware only for Gin**. For other frameworks, you need manual implementation.
-
-#### Chi Router Example (Manual Implementation)
-
-```go
-package main
-
-import (
-    "context"
-    "fmt"
-    "net/http"
-    "time"
-    
-    "github.com/go-chi/chi/v5"
-    logging "github.com/ahmadsaubani/go-logging-lib"
-)
-
-func main() {
-    config := &logging.Config{
-        ServiceName:  "chi-api",
-        LogPath:      "./logs/chi-app", 
-        EnableStdout: true,
-        EnableFile:   true,
-        EnableLoki:   true,
-    }
-
-    logger, _ := logging.New(config)
-    
-    r := chi.NewRouter()
-    
-    // Manual middleware implementation for Chi
-    // (No built-in Chi middleware available)
-    r.Use(func(next http.Handler) http.Handler {
-        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-            // Manually inject context metadata
-            ctx := logging.WithMeta(r.Context(), logging.Meta{
-                RequestID: generateRequestID(),
-                IP:        r.RemoteAddr,
-                Method:    r.Method,
-                Path:      r.URL.Path,
-                UserAgent: r.UserAgent(),
-            })
-            
-            logger.Info(fmt.Sprintf("📨 %s %s", r.Method, r.URL.Path))
-            next.ServeHTTP(w, r.WithContext(ctx))
-        })
-    })
-    
-    r.Get("/api/health", func(w http.ResponseWriter, r *http.Request) {
-        logger.Info("🏥 Health endpoint accessed")
-        w.Header().Set("Content-Type", "application/json") 
-        w.Write([]byte(`{"status": "healthy", "service": "chi-api"}`))
-    })
-    
-    logger.Info("🚀 Chi server starting on :8080")
-    http.ListenAndServe(":8080", r)
-}
-
-func generateRequestID() string {
-    return fmt.Sprintf("req-%d", time.Now().UnixNano())
-}
-```
-
-**Note**: The above is a **manual implementation pattern**. Unlike Gin, there are no built-in Chi middleware functions in this library. You must implement the middleware yourself following this pattern.
-
-### Standard HTTP Handler Example
-
-```go
-package main
-
-import (
-    "context"
-    "errors"
-    "fmt"
-    "net/http"
-    "time"
-    
-    logging "github.com/ahmadsaubani/go-logging-lib"
-)
-
-func main() {
-    config := &logging.Config{
-        ServiceName:  "http-server",
-        LogPath:      "./logs/http-app",
-        EnableStdout: true,
-        EnableFile:   true,
-        EnableLoki:   true,
-    }
-
-    logger, _ := logging.New(config)
-    
-    // Wrapper untuk inject context
-    loggedHandler := func(handler http.HandlerFunc) http.HandlerFunc {
-        return func(w http.ResponseWriter, r *http.Request) {
-            ctx := logging.WithMeta(r.Context(), logging.Meta{
-                RequestID: generateRequestID(),
-                IP:        r.RemoteAddr,
-                Method:    r.Method,
-                Path:      r.URL.Path,
-                UserAgent: r.UserAgent(),
-            })
-            
-            logger.Info(fmt.Sprintf("%s %s", r.Method, r.URL.Path))
-            
-            // Pass context to handler
-            handler(w, r.WithContext(ctx))
-        }
-    }
-    
-    http.HandleFunc("/health", loggedHandler(func(w http.ResponseWriter, r *http.Request) {
-        logger.Info("Health check")
-        w.Write([]byte("OK"))
-    }))
-    
-    http.HandleFunc("/error", loggedHandler(func(w http.ResponseWriter, r *http.Request) {
-        err := errors.New("sample error")
-        logger.Error(r.Context(), err)
-        logger.ErrorLoki(r.Context(), logging.LevelError, err)
-        http.Error(w, "Internal Server Error", 500)
-    }))
-    
-    logger.Info("🚀 HTTP server starting on :8080")
-    http.ListenAndServe(":8080", nil)
-}
-```
-
----
-
-## ⚙️ Configuration
-
-### Configuration Structure
-
-```go
-type Config struct {
-    ServiceName  string // Service identifier (appears in logs)
-    LogPath      string // Base path for log files (without extension)
-    EnableStdout bool   // Enable console output
-    EnableFile   bool   // Enable file output  
-    EnableLoki   bool   // Enable JSON/structured output
-}
-```
-
-### Environment-based Configuration
-
-```go
-package main
-
-import (
-    "os"
-    logging "github.com/ahmadsaubani/go-logging-lib"
-)
-
-func createLoggerConfig() *logging.Config {
-    env := os.Getenv("APP_ENV")
-    serviceName := os.Getenv("SERVICE_NAME")
-    
-    if serviceName == "" {
-        serviceName = "my-app"
-    }
-    
-    switch env {
-    case "production":
-        return &logging.Config{
-            ServiceName:  serviceName,
-            LogPath:      "/var/log/" + serviceName + "/app",
-            EnableStdout: false, // Reduce console noise in production
-            EnableFile:   true,  // Essential for production debugging
-            EnableLoki:   true,  // Enable monitoring integration
-        }
-        
-    case "staging":
-        return &logging.Config{
-            ServiceName:  serviceName + "-staging",
-            LogPath:      "./logs/staging-app",
-            EnableStdout: true,  // Helpful for staging debugging
-            EnableFile:   true,  // Keep logs for analysis
-            EnableLoki:   true,  // Test monitoring integration
-        }
-        
-    case "testing":
-        return &logging.Config{
-            ServiceName:  serviceName + "-test",
-            LogPath:      "./test-logs/app",
-            EnableStdout: false, // Reduce test noise
-            EnableFile:   true,  // Verify test log output
-            EnableLoki:   true,  // Test JSON format
-        }
-        
-    default: // development
-        return &logging.Config{
-            ServiceName:  serviceName + "-dev",
-            LogPath:      "./logs/dev-app", 
-            EnableStdout: true,  // Show logs in terminal
-            EnableFile:   false, // Skip file creation for speed
-            EnableLoki:   false, // Not needed in development
-        }
-    }
-}
-
-func main() {
-    config := createLoggerConfig()
-    logger, err := logging.New(config)
-    if err != nil {
-        panic(err)
-    }
-    
-    logger.Info(fmt.Sprintf("🚀 Starting %s in %s mode", 
-        config.ServiceName, os.Getenv("APP_ENV")))
-}
-```
-
----
-
-## 📁 Log File Structure & Examples
-
-### File Naming Convention
-
-```
-{LogPath}.access-{YYYY-MM-DD}.log      # Info/access logs
-{LogPath}.error-{YYYY-MM-DD}.log       # Human-readable error logs  
-{LogPath}.error-loki-{YYYY-MM-DD}.log  # JSON structured logs
-```
-
-### Real Log File Examples
-
-#### Access Log (`app.access-2026-01-31.log`)
-```
-2026/01/31 13:20:15 logger.go:125: [INFO] 🚀 Application started
-2026/01/31 13:20:15 logger.go:125: [INFO] 📊 Loading configuration...
-2026/01/31 13:20:16 logger.go:125: [INFO] 🌐 Starting server on :8080
-2026/01/31 13:20:45 logger.go:125: [INFO] 👥 Fetching users list  
-2026/01/31 13:20:45 logger.go:125: [INFO] 📊 Retrieved 15 users
-2026/01/31 13:21:10 logger.go:125: [INFO] ➕ Creating user: John Doe <john@example.com>
-2026/01/31 13:21:30 logger.go:125: [INFO] 🔍 Fetching user ID: 123
-```
-
-#### Error Log (`app.error-2026-01-31.log`)
-```
-2026/01/31 13:22:15 error_logging.go:37: [ERROR]
-==============================CRITICAL[13:22:15]==================================
-ERROR  : failed to connect to database: connection timeout
-REQ    : req-abc123-def456
-FROM   : main.go:87
-HTTP   : POST /api/users (192.168.1.100)
-UA     : PostmanRuntime/7.29.2
-STACK  :
-- main.go:87              main.createUser
-- gin.go:192              gin.(*Context).Next  
-- middleware.go:45        middleware.AuthMiddleware
-
-==============================CRITICAL[13:22:15]==================================
-```
-
-#### Loki JSON Log (`app.error-loki-2026-01-31.log`)
-```json
-{"error":"failed to connect to database: connection timeout","http":{"ip":"192.168.1.100","method":"POST","path":"/api/users","ua":"PostmanRuntime/7.29.2"},"level":"CRITICAL","request_id":"req-abc123-def456","service":"user-api","source":{"file":"main.go","line":87},"stack":["main.go:87 main.createUser","gin.go:192 gin.(*Context).Next"],"ts":"2026-01-31T13:22:15+07:00"}
-
-{"error":"validation failed: email is required","http":{"ip":"10.0.0.25","method":"PUT","path":"/api/users/456","ua":"axios/0.21.1"},"level":"ERROR","request_id":"req-validation-001","service":"user-api","source":{"file":"handlers.go","line":234},"stack":["handlers.go:234 handlers.updateUser","validator.go:45 validation.ValidateUser"],"ts":"2026-01-31T13:22:48+07:00"}
-```
-
----
-
-## 📚 Complete API Reference
-
-### Core Logger Methods
-
-#### `New(config *Config) (*Logger, error)`
-Creates a new logger instance.
-
-```go
-config := &logging.Config{
-    ServiceName:  "my-service",
-    LogPath:      "./logs/app",
-    EnableStdout: true,
-    EnableFile:   true,
-    EnableLoki:   true,
-}
-
-logger, err := logging.New(config)
-if err != nil {
-    log.Fatal("Failed to create logger:", err)
-}
-```
-
-#### `Info(message string)`
-Logs informational messages to access log and console.
-
-```go
-logger.Info("Service started successfully")
-logger.Info(fmt.Sprintf("Processing %d items", itemCount))
-logger.Info("🚀 Application ready to serve requests")
-```
-
-#### `Error(ctx context.Context, err error)`
-Logs errors with full context, metadata, and stack trace.
-
-```go
-if err := database.Connect(); err != nil {
-    logger.Error(ctx, err)
-}
-
-// With custom context
-ctx := logging.WithMeta(context.Background(), logging.Meta{
-    RequestID: "custom-req-001",
-    IP:        "127.0.0.1",
-    Method:    "POST",
-    Path:      "/api/custom",
-    UserAgent: "CustomClient/1.0",
-})
-logger.Error(ctx, errors.New("custom error with context"))
-```
-
-#### `ErrorLoki(ctx context.Context, level LogLevel, err error)`
-Logs errors in JSON format with specified severity level.
-
-```go
-// Available levels: LevelInfo, LevelWarn, LevelError, LevelCritical
-logger.ErrorLoki(ctx, logging.LevelInfo, infoErr)       // General info
-logger.ErrorLoki(ctx, logging.LevelWarn, warningErr)    // Warning condition
-logger.ErrorLoki(ctx, logging.LevelError, standardErr)  // Error condition  
-logger.ErrorLoki(ctx, logging.LevelCritical, criticalErr) // Critical failure
-
-// Practical examples
-if memUsage > 90 {
-    err := errors.New("high memory usage detected")
-    logger.ErrorLoki(ctx, logging.LevelWarn, err)
-}
-
-if paymentFailed {
-    err := errors.New("payment processing failed")
-    logger.ErrorLoki(ctx, logging.LevelCritical, err)
-}
-```
-
-### Context Management
-
-#### `WithMeta(ctx context.Context, meta Meta) context.Context`
-Injects request metadata into context for structured logging.
-
-```go
-// Complete metadata
-meta := logging.Meta{
-    RequestID: generateUniqueID(),
-    IP:        extractClientIP(),
-    Method:    "POST",
-    Path:      "/api/v1/users",
-    UserAgent: "MyApp/2.1.0",
-}
-ctx := logging.WithMeta(context.Background(), meta)
-
-// Minimal metadata
-meta := logging.Meta{
-    RequestID: "batch-job-001",
-}
-ctx := logging.WithMeta(context.Background(), meta)
-```
-
-#### `FromContext(ctx context.Context) (Meta, bool)`
-Retrieves metadata from context.
-
-```go
-meta, exists := logging.FromContext(ctx)
-if exists {
-    fmt.Printf("Processing request %s from %s", meta.RequestID, meta.IP)
-} else {
-    fmt.Println("No metadata in context")
-}
-```
-
-### Gin Framework Helpers (Only Available for Gin)
-
-#### `LogErrorWithMark(c *gin.Context, err error)`
-Logs error with Gin context and prevents duplicate logging by middleware.
-
-```go
-func createUser(logger *logging.Logger) gin.HandlerFunc {
-    return func(c *gin.Context) {
-        var user User
-        if err := c.ShouldBindJSON(&user); err != nil {
-            // This prevents the HTTP error middleware from logging again
-            logger.LogErrorWithMark(c, err)
-            c.JSON(400, gin.H{"error": "Invalid request format"})
-            return
-        }
-        
-        // Success case
-        c.JSON(201, gin.H{"user": user, "status": "created"})
-    }
-}
-```
-
-#### `MarkErrorLogged(c *gin.Context)` / `IsErrorLogged(c *gin.Context) bool`
-Manual control over error logging duplication (Gin only).
-
-```go
-func customErrorHandler(logger *logging.Logger) gin.HandlerFunc {
-    return func(c *gin.Context) {
-        c.Next() // Process request
-        
-        // Check for errors after processing
-        if len(c.Errors) > 0 && !logging.IsErrorLogged(c) {
-            for _, err := range c.Errors {
-                logger.Error(c.Request.Context(), err.Err)
-            }
-            logging.MarkErrorLogged(c)
-        }
-    }
 }
 ```
 
 ### Gin Middleware Functions
 
-#### `middleware.GinMiddleware(logger *logging.Logger) gin.HandlerFunc`
-Injects request metadata into Gin context.
+| Middleware | Description |
+|------------|-------------|
+| `GinMiddleware` | Injects request metadata (request ID, IP, method, path) into context |
+| `GinLogger` | Logs all HTTP requests to access log and Loki (all status codes) |
+| `GinHTTPErrorLogger` | Logs detailed errors for 4xx and 5xx responses |
+| `GinRecovery` | Recovers from panics and logs the error |
 
-#### `middleware.GinLogger(logger *logging.Logger) gin.HandlerFunc`
-Logs HTTP requests and responses.
+### Access Log Output (Gin)
 
-#### `middleware.GinHTTPErrorLogger(logger *logging.Logger) gin.HandlerFunc`
-Automatically logs HTTP errors with anti-duplication.
-
-#### `middleware.GinRecovery(logger *logging.Logger) gin.HandlerFunc`
-Recovers from panics and logs them.
-
----
-
-## 🧪 Testing Guide
-
-### 1. Testing the Library Itself
-
-#### Running Library Tests
-
-```bash
-# Navigate to library directory
-cd go-logging-lib
-
-# Run comprehensive tests that create actual log files
-cd tests && go test -v .
-
-# Expected output:
-# ✅ BASIC Access log: ../examples/basic/logs/app.access-2026-01-31.log (429 bytes)
-# ✅ BASIC Error log: ../examples/basic/logs/app.error-2026-01-31.log (549 bytes)  
-# ✅ BASIC Loki log: ../examples/basic/logs/app.error-loki-2026-01-31.log (859 bytes)
-# ✅ GIN Access log: ../examples/gin/logs/gin-app.access-2026-01-31.log (155 bytes)
-# ✅ GIN Error log: ../examples/gin/logs/gin-app.error-2026-01-31.log (2361 bytes)
-# ✅ GIN Loki log: ../examples/gin/logs/gin-app.error-loki-2026-01-31.log (2408 bytes)
+```
+2026/02/04 12:00:00 logger.go:129: [INFO] Home endpoint accessed
+2026/02/04 12:00:00 logger.go:133: [REQ:abc-123] 2026-02-04T12:00:00+07:00 | 200 |      150.25µs |       127.0.0.1 | GET     /
+2026/02/04 12:00:00 logger.go:129: [INFO] Fetching users
+2026/02/04 12:00:00 logger.go:133: [REQ:def-456] 2026-02-04T12:00:00+07:00 | 200 |       85.50µs |       127.0.0.1 | GET     /users
+2026/02/04 12:00:00 logger.go:133: [REQ:ghi-789] 2026-02-04T12:00:00+07:00 | 404 |       25.00µs |       127.0.0.1 | GET     /not-found
+2026/02/04 12:00:00 logger.go:133: [REQ:jkl-012] 2026-02-04T12:00:00+07:00 | 500 |      200.00µs |       127.0.0.1 | GET     /error
 ```
 
-### 2. Testing in Your Projects
+### Error Log Output (Gin)
 
-#### Unit Testing Example
+```
+2026/02/04 12:00:00 error_logging.go:37: [ERROR]
+==============================CRITICAL[12:00:00]==================================
+ERROR  : something went wrong
+REQ    : jkl-012
+FROM   : handler.go:25
+HTTP   : GET /error (127.0.0.1)
+UA     : Mozilla/5.0
+STACK  :
+- handler.go:25                main.errorHandler
+- context.go:192               gin.(*Context).Next
+- gin.go:114                   middleware.GinRecovery.func1
+==============================CRITICAL[12:00:00]==================================
+```
+
+### Loki JSON Output (Gin)
+
+```json
+{"http":{"ip":"127.0.0.1","method":"GET","path":"/","ua":"Mozilla/5.0"},"latency_ms":0,"level":"INFO","request_id":"abc-123","service":"my-api","status_code":200,"ts":"2026-02-04T12:00:00+07:00"}
+{"http":{"ip":"127.0.0.1","method":"GET","path":"/not-found","ua":"Mozilla/5.0"},"latency_ms":0,"level":"ERROR","request_id":"ghi-789","service":"my-api","status_code":404,"ts":"2026-02-04T12:00:00+07:00"}
+{"http":{"ip":"127.0.0.1","method":"GET","path":"/error","ua":"Mozilla/5.0"},"latency_ms":0,"level":"CRITICAL","request_id":"jkl-012","service":"my-api","status_code":500,"ts":"2026-02-04T12:00:00+07:00"}
+```
+
+## Log Levels
+
+| Level | Status Code | Description |
+|-------|-------------|-------------|
+| `INFO` | 200-299 | Successful requests |
+| `WARN` | 300-399 | Redirects |
+| `ERROR` | 400-499 | Client errors |
+| `CRITICAL` | 500+ | Server errors |
+
+## API Reference
+
+### Logger Methods
 
 ```go
-// user_service_test.go
-package main
+// Info logs an info message to access log
+logger.Info(msg string)
 
-import (
-    "context"
-    "errors"
-    "os"
-    "testing"
-    "time"
-    
-    logging "github.com/ahmadsaubani/go-logging-lib"
-    "github.com/stretchr/testify/assert"
-    "github.com/stretchr/testify/require"
-)
+// LogRequest logs HTTP request to access log and Loki (for non-Gin usage)
+logger.LogRequest(ctx context.Context, statusCode int, latency time.Duration)
 
-func TestUserService(t *testing.T) {
-    // Setup test logger
-    testLogDir := "./test-logs"
-    os.RemoveAll(testLogDir) // Clean previous test logs
-    
-    config := &logging.Config{
-        ServiceName:  "user-service-test",
-        LogPath:      testLogDir + "/app",
-        EnableStdout: false, // Reduce test noise
-        EnableFile:   true,  // Verify file output
-        EnableLoki:   true,  // Test JSON format
-    }
-    
-    logger, err := logging.New(config)
-    require.NoError(t, err)
-    
-    t.Run("successful user creation", func(t *testing.T) {
-        ctx := logging.WithMeta(context.Background(), logging.Meta{
-            RequestID: "test-create-001",
-            IP:        "127.0.0.1",
-            Method:    "POST",
-            Path:      "/api/users",
-        })
-        
-        // Test the service
-        service := NewUserService(logger)
-        user, err := service.CreateUser(ctx, "John Doe", "john@example.com")
-        
-        assert.NoError(t, err)
-        assert.Equal(t, "John Doe", user.Name)
-        assert.Equal(t, "john@example.com", user.Email)
-        
-        // Verify logs were created
-        verifyLogFiles(t, testLogDir)
-    })
-    
-    // Cleanup
-    t.Cleanup(func() {
-        os.RemoveAll(testLogDir)
-    })
-}
+// Error logs detailed error to error log
+logger.Error(ctx context.Context, err error)
 
-func verifyLogFiles(t *testing.T, logDir string) {
-    today := time.Now().Format("2006-01-02")
-    
-    accessFile := logDir + "/app.access-" + today + ".log"
-    errorFile := logDir + "/app.error-" + today + ".log"  
-    lokiFile := logDir + "/app.error-loki-" + today + ".log"
-    
-    // Check files exist
-    assert.FileExists(t, accessFile, "Access log should exist")
-    assert.FileExists(t, errorFile, "Error log should exist")
-    assert.FileExists(t, lokiFile, "Loki log should exist")
-    
-    // Check file sizes
-    accessStat, _ := os.Stat(accessFile)
-    assert.Greater(t, accessStat.Size(), int64(0), "Access log should not be empty")
-}
+// ErrorLoki logs error in JSON format to Loki log
+logger.ErrorLoki(ctx context.Context, level LogLevel, err error)
+
+// LogErrorWithMark logs error and marks it to prevent duplicate logging (Gin only)
+logger.LogErrorWithMark(c *gin.Context, err error)
 ```
 
-#### Integration Testing with Gin
+### Context Functions
 
 ```go
-// gin_api_test.go
-package main
-
-import (
-    "bytes"
-    "encoding/json"
-    "net/http"
-    "net/http/httptest"
-    "os"
-    "strings"
-    "testing"
-    "time"
-    
-    "github.com/gin-gonic/gin"
-    logging "github.com/ahmadsaubani/go-logging-lib"
-    "github.com/ahmadsaubani/go-logging-lib/middleware"
-    "github.com/stretchr/testify/assert"
-    "github.com/stretchr/testify/require"
-)
-
-func TestGinAPIIntegration(t *testing.T) {
-    gin.SetMode(gin.TestMode)
-    
-    // Setup test logger
-    testLogDir := "./integration-test-logs"
-    os.RemoveAll(testLogDir)
-    
-    config := &logging.Config{
-        ServiceName:  "gin-integration-test",
-        LogPath:      testLogDir + "/api",
-        EnableStdout: false,
-        EnableFile:   true,
-        EnableLoki:   true,
-    }
-    
-    logger, err := logging.New(config)
-    require.NoError(t, err)
-    
-    // Setup router with middleware
-    r := gin.New()
-    r.Use(middleware.GinMiddleware(logger))
-    r.Use(middleware.GinLogger(logger))
-    r.Use(middleware.GinHTTPErrorLogger(logger))
-    r.Use(middleware.GinRecovery(logger))
-    
-    // Add routes
-    r.POST("/api/users", createUserHandler(logger))
-    r.GET("/api/error", errorHandler(logger))
-    r.GET("/api/panic", panicHandler())
-    
-    t.Run("successful request", func(t *testing.T) {
-        user := map[string]string{
-            "name":  "Test User",
-            "email": "test@example.com",
-        }
-        
-        body, _ := json.Marshal(user)
-        req := httptest.NewRequest("POST", "/api/users", bytes.NewBuffer(body))
-        req.Header.Set("Content-Type", "application/json")
-        req.Header.Set("User-Agent", "TestClient/1.0")
-        
-        w := httptest.NewRecorder()
-        r.ServeHTTP(w, req)
-        
-        assert.Equal(t, 201, w.Code)
-    })
-    
-    t.Run("error handling with anti-duplication", func(t *testing.T) {
-        req := httptest.NewRequest("GET", "/api/error", nil)
-        w := httptest.NewRecorder()
-        r.ServeHTTP(w, req)
-        
-        assert.Equal(t, 500, w.Code)
-        
-        // Verify no duplicate error logs
-        verifyNoDuplicateErrors(t, testLogDir)
-    })
-    
-    // Cleanup
-    t.Cleanup(func() {
-        os.RemoveAll(testLogDir)
-    })
-}
-
-func createUserHandler(logger *logging.Logger) gin.HandlerFunc {
-    return func(c *gin.Context) {
-        var user struct {
-            Name  string `json:"name" binding:"required"`
-            Email string `json:"email" binding:"required,email"`
-        }
-        
-        if err := c.ShouldBindJSON(&user); err != nil {
-            logger.LogErrorWithMark(c, err)
-            c.JSON(400, gin.H{"error": "Invalid input"})
-            return
-        }
-        
-        c.JSON(201, gin.H{"user": user})
-    }
-}
-
-func errorHandler(logger *logging.Logger) gin.HandlerFunc {
-    return func(c *gin.Context) {
-        err := errors.New("manual error for testing")
-        logger.LogErrorWithMark(c, err) // This should prevent HTTP middleware duplication
-        c.JSON(500, gin.H{"error": "Something went wrong"})
-    }
-}
-
-func panicHandler() gin.HandlerFunc {
-    return func(c *gin.Context) {
-        panic("test panic for recovery")
-    }
-}
-
-func verifyNoDuplicateErrors(t *testing.T, logDir string) {
-    today := time.Now().Format("2006-01-02")
-    errorFile := logDir + "/api.error-" + today + ".log"
-    
-    content, err := os.ReadFile(errorFile)
-    require.NoError(t, err)
-    
-    errorContent := string(content)
-    manualErrors := strings.Count(errorContent, "manual error for testing")
-    httpErrors := strings.Count(errorContent, "HTTP Error")
-    
-    // Should only have manual error, not HTTP error (due to anti-duplication)
-    assert.Equal(t, 1, manualErrors, "Should have exactly one manual error log")
-    assert.Equal(t, 0, httpErrors, "Should not have HTTP error log due to anti-duplication")
-}
-```
-
----
-
-## 🚀 Using in Your Projects
-
-### Step 1: Install
-```bash
-go get github.com/ahmadsaubani/go-logging-lib
-```
-
-### Step 2: Initialize (once per application)
-```go
-package main
-
-import (
-    "fmt"
-    logging "github.com/ahmadsaubani/go-logging-lib"
-)
-
-var AppLogger *logging.Logger
-
-func init() {
-    config := &logging.Config{
-        ServiceName:  "your-app-name", 
-        LogPath:      "./logs/app",
-        EnableStdout: true,
-        EnableFile:   true, 
-        EnableLoki:   true,
-    }
-    
-    var err error
-    AppLogger, err = logging.New(config)
-    if err != nil {
-        panic(fmt.Sprintf("Failed to initialize logger: %v", err))
-    }
-}
-```
-
-### Step 3: Use in Business Logic
-```go
-// In handlers, services, business logic, etc.
-func ProcessOrder(ctx context.Context, orderID string) error {
-    AppLogger.Info(fmt.Sprintf("Processing order %s", orderID))
-    
-    if err := validateOrder(orderID); err != nil {
-        AppLogger.Error(ctx, err)
-        return err
-    }
-    
-    AppLogger.Info(fmt.Sprintf("Order %s processed successfully", orderID))
-    return nil
-}
-```
-
-### Step 4: For Gin Projects, Add Middleware
-```go
-r := gin.New()
-r.Use(middleware.GinMiddleware(AppLogger))
-r.Use(middleware.GinLogger(AppLogger))
-r.Use(middleware.GinHTTPErrorLogger(AppLogger))
-r.Use(middleware.GinRecovery(AppLogger))
-```
-
----
-
-## 🔧 Production Deployment
-
-### Docker Configuration
-
-```dockerfile
-# Dockerfile
-FROM golang:1.21-alpine AS builder
-WORKDIR /app
-COPY . .
-RUN go mod download
-RUN go build -o main .
-
-FROM alpine:latest
-RUN apk --no-cache add ca-certificates
-WORKDIR /root/
-COPY --from=builder /app/main .
-
-# Create log directory
-RUN mkdir -p /var/log/myapp
-
-# Set environment variables
-ENV APP_ENV=production
-ENV SERVICE_NAME=my-app
-
-CMD ["./main"]
-```
-
-```yaml
-# docker-compose.yml
-version: '3.8'
-services:
-  app:
-    build: .
-    environment:
-      - APP_ENV=production
-      - SERVICE_NAME=my-app
-    volumes:
-      - ./logs:/var/log/myapp  # Mount log directory
-    ports:
-      - "8080:8080"
-```
-
-### Monitoring Integration
-
-The JSON logs (`*.error-loki-*.log`) can be directly ingested by:
-- **Grafana/Loki**: Configure Promtail to watch log files
-- **ELK Stack**: Logstash can parse the JSON format directly
-- **Datadog/New Relic**: Configure agents to monitor JSON log files
-
----
-
-## ⚠️ Common Pitfalls & Troubleshooting
-
-### 1. Duplicate Error Logging in Gin Applications
-
-**Problem**: Manual error logging in service/controller AND automatic HTTP error middleware both log the same error.
-
-```go
-// ❌ BAD: This will cause duplicate logging
-func (h *handler) CreateUser(c *gin.Context) {
-    if err := h.service.CreateUser(ctx, user); err != nil {
-        logger.Error(ctx, err)           // Manual log #1 
-        c.JSON(500, gin.H{"error": err}) // HTTP middleware will log again #2 = DUPLICATE!
-        return
-    }
-}
-```
-
-**Solution A**: Use `LogErrorWithMark` to prevent duplication:
-```go
-// ✅ GOOD: Prevents middleware from logging again
-func (h *handler) CreateUser(c *gin.Context) {
-    if err := h.service.CreateUser(ctx, user); err != nil {
-        logger.LogErrorWithMark(c, err)  // Marks as logged
-        c.JSON(500, gin.H{"error": err}) // Middleware skips logging
-        return
-    }
-}
-```
-
-**Solution B**: Mark manually after separate logging calls:
-```go
-// ✅ GOOD: Mark after logging manually
-if err := emailService.Send(ctx, mail); err != nil {
-    logger.Error(ctx, err)          // Log error manually
-    logger.ErrorLoki(ctx, LevelCritical, err)
-    logging.MarkErrorLogged(c)      // Prevent middleware duplication
-    c.JSON(500, gin.H{"error": "email failed"})
-    return
-}
-```
-
-### 2. Missing Request Context
-
-**Problem**: Logging without proper request context loses valuable debugging information.
-
-```go
-// ❌ BAD: No request metadata
-logger.Error(context.Background(), err)
-```
-
-```go
-// ✅ GOOD: With request context and metadata
-ctx := logging.WithMeta(c.Request.Context(), logging.Meta{
-    RequestID: "req-123",
-    IP: "127.0.0.1", 
-    Method: "POST",
-    Path: "/api/users",
+// WithMeta adds request metadata to context
+ctx := logging.WithMeta(context.Background(), logging.Meta{
+    RequestID: "req-001",
+    IP:        "127.0.0.1",
+    Method:    "GET",
+    Path:      "/api/users",
     UserAgent: "MyApp/1.0",
 })
-logger.Error(ctx, err)
+
+// FromContext retrieves metadata from context
+meta, ok := logging.FromContext(ctx)
 ```
 
-### 3. Incorrect Middleware Order
+## Best Practices
 
-**Problem**: Wrong middleware order can break logging functionality.
+1. **Always set `EnableRotation: true` in production** to prevent log files from growing indefinitely
+2. **Use `LogErrorWithMark` in Gin handlers** to prevent duplicate error logging
+3. **Set meaningful `ServiceName`** for easier log filtering in monitoring systems
+4. **Use appropriate log levels** via `ErrorLoki` for proper alerting
+5. **Middleware order matters in Gin**: GinMiddleware -> GinLogger -> GinHTTPErrorLogger -> GinRecovery
 
-```go
-// ❌ BAD: Wrong order
-r.Use(
-    gin.Recovery(),                              // Too early!
-    ginmiddleware.GinLogger(logger),
-    ginmiddleware.GinMiddleware(logger),         // Should be first!
-    ginmiddleware.GinHTTPErrorLogger(logger),
-)
-```
+## License
 
-```go
-// ✅ GOOD: Correct order
-r.Use(
-    ginmiddleware.GinMiddleware(logger),         // 1. Inject metadata
-    ginmiddleware.GinLogger(logger),            // 2. Log requests  
-    ginmiddleware.GinHTTPErrorLogger(logger),   // 3. Handle HTTP errors
-    ginmiddleware.GinRecovery(logger),          // 4. Panic recovery
-)
-```
-
-### 4. Configuration Issues
-
-**Problem**: Forgetting to enable required outputs.
-
-```go
-// ❌ BAD: File logging disabled in production
-config := &logging.Config{
-    ServiceName:  "my-service",
-    EnableStdout: true,
-    EnableFile:   false,  // Logs lost!
-    EnableLoki:   false,
-}
-```
-
-```go
-// ✅ GOOD: Proper production config
-config := &logging.Config{
-    ServiceName:  "my-service", 
-    LogPath:      "/var/log/myapp/app",
-    EnableStdout: false, // Reduce console noise
-    EnableFile:   true,  // Essential for debugging
-    EnableLoki:   true,  // For monitoring systems
-}
-```
-
-### 5. Testing Without File Verification
-
-**Problem**: Unit tests pass but log files aren't actually created.
-
-```go
-// ❌ BAD: Test doesn't verify actual file output
-func TestLogging(t *testing.T) {
-    logger, _ := logging.New(config)
-    logger.Error(ctx, errors.New("test"))
-    // No verification of log files!
-}
-```
-
-```go
-// ✅ GOOD: Verify actual file creation and content
-func TestLogging(t *testing.T) {
-    testDir := "./test-logs"
-    defer os.RemoveAll(testDir)
-    
-    config := &logging.Config{
-        LogPath:      testDir + "/test",
-        EnableFile:   true,
-        EnableLoki:   true,
-    }
-    
-    logger, _ := logging.New(config)
-    logger.Error(ctx, errors.New("test error"))
-    
-    // Verify files exist and contain expected content
-    errorFile := filepath.Join(testDir, "test.error-*.log")
-    files, _ := filepath.Glob(errorFile)
-    require.NotEmpty(t, files, "Error log file should be created")
-    
-    content, _ := ioutil.ReadFile(files[0])
-    assert.Contains(t, string(content), "test error")
-}
-```
-
----
-
-## 📊 Performance Considerations
-
-- **File Output**: Disable in development for faster iteration
-- **Buffer Size**: Logs written immediately for reliability
-- **Concurrent Safety**: Built-in mutex protection
-- **Memory Usage**: Minimal overhead, stack traces only on errors
-- **Disk Space**: Daily rotation prevents unlimited growth
-
----
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🆘 Support
-
-- 📚 [Documentation](https://github.com/ahmadsaubani/go-logging-lib#readme)
-- 🐛 [Report Issues](https://github.com/ahmadsaubani/go-logging-lib/issues)
-- 💬 [Discussions](https://github.com/ahmadsaubani/go-logging-lib/discussions)
-
----
-
-**Made with ❤️ for the Go community** 
-
-⭐ **If this library helps your project, please give it a star!** ⭐
+MIT License - see [LICENSE](LICENSE) for details.
